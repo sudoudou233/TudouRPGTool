@@ -5,6 +5,77 @@
 
 ---
 
+## 2026-09-12 ｜ M2b（3/3 之二）：值层门面 `value_layer.py` 落地（marshal 收敛的实施第一步）
+
+### 改了什么
+
+| 文件 | 内容 |
+| --- | --- |
+| `core/marshal/value_layer.py`（新，约 640 行） | 在**文档模型**之上提供"像 Python 对象一样读写"的值层视图 |
+| `tests/unit/test_marshal_value.py`（新，36 例） | 覆盖标量、对象代理、**改动落到 Node**、字节稳定性、Hash/Array、unwrap |
+
+### 为什么这样合（ADR-004 的关键设计）
+
+`core/marshal/` 有两份独立实现：`doc_model`（Node 树 + `Node.raw` 增量字节保真）
+与 `value_model`（`RM*` 类 + 直接读写 Python 值）。ADR-004 定的方向是
+"文档模型为二进制层主体、值模型降为门面"。
+
+**但"把值模型搬到文档模型上跑两遍编解码"是错的** —— 那会丢掉字节保真。
+本实现的机制是让值层对象**直接持有并改写 Node**：
+
+* 读：`wrap(node)` 把 Node 包成 `RMObject` / `RMStr` / `RMIvar` 等代理
+* 写：代理上的修改经 `_IvarMap` / 列表视图**立刻落到 Node**
+* 存：`doc_model.dumps(root)` —— 因为改的就是 Node，未触碰的子树仍吐原始字节
+
+于是"值层的便利"与"文档模型的字节保真"同时成立，且**只有一份解析器**。
+这正是需求 §3.3 想要的收敛结果。
+
+### 唯一的真难点：ivar 键的两种约定
+
+* 文档模型的 `ObjectNode.ivars` 是 **`(Symbol 节点, 值节点)` 的列表**，名字带 `@`
+* 旧值模型与所有调用方（`core/formats/rgss_data.py`）用**普通 dict**，
+  键是 `str`，且**允许省略 `@`**（`rgss_data` 两种都写）
+
+`_IvarMap` 因此做成"双向容忍"的映射视图：读时先试原样再试加/去 `@`；
+写时复用已存在的键名（避免产生 `level` 与 `@level` 两个键），
+不存在则按该对象现有习惯决定是否加 `@`。Hash 键用同一套规则（`_key_candidates`）。
+
+### 怎么验证
+
+```powershell
+python tests/run_all.py                      # 466 例，0 失败 0 错误
+$env:TUDOU_RPGTOOL_SAMPLES='D:\gamess'
+python tests/run_all.py                      # 300 个真实 .rvdata2 零漂移
+python tools/check_footprint.py --quiet      # 38 文件，退出码 0
+python app.py --check                        # 退出码 0
+```
+
+关键断言：**未改动的往返字节一致**（`test_untouched_roundtrip_is_byte_exact`）、
+**只改一个字段时其它子树仍吐原始字节**（`test_untouched_subtree_keeps_raw_bytes`）、
+**用不带 `@` 的键写不会新建重复键**（`test_set_without_at_prefix_reuses_existing_key`）。
+
+### 实现期间踩到的三个坑（已写进测试注释）
+
+1. `Bignum(sign, digits)` 的 `sign` 是 `b'+'`/`b'-'`，`digits` 是 16 位数字组
+   —— 不是原始字节
+2. 代理之间比较要**递归展开**：`dict(self.items()) == other` 会拿
+   `RMArray`/`RMDict` 与 `[1,2]`/`{1:2}` 比，必然不等。为此加了 `to_plain()`
+   （明确标注"只用于比较/展示，不要用它写回"）
+3. Hash 的符号键有的带 `@` 有的不带，键匹配必须与 `_IvarMap` 用同一套容忍规则
+
+### 遗留（M2b 最后一步）
+
+`value_layer` 目前**尚未被任何生产代码使用** —— 下一步才是切换：
+
+1. `core/formats/rgss_data.py` 由 `from ..marshal import value_model` 改为
+   用 `value_layer`（接口已按它的用法设计：`RMObject.ivars[...]`、
+   `RMIvar.value`、`RMStr.enc`、`loads`/`dumps`）
+2. `core/safety/builder.py` 的字体脚本注入改用 `value_layer` 构造节点
+3. 删除 `core/marshal/value_model.py`，`CONVERGENCE_STATUS` 置 `"merged"`
+4. 加静态断言：`core/marshal/` 下只剩一份二进制实现
+
+---
+
 ## 2026-09-12 ｜ M2b（3/3 之一）：删除 `core/_refbridge.py`，`/api/health` 改报收敛状态
 
 ### 改了什么

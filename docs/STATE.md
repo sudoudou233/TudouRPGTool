@@ -194,42 +194,45 @@ python app.py --check                        # 退出码 0
 
 ## 7. 下一步（M2b 剩余 2/3）任务清单
 
-### 7.1 marshal 收敛为一份（**下一轮的第一件事**）
+### 7.1 marshal 收敛为一份（**第 1 步已完成，剩 4 步**）
 
 按 **ADR-004**：以 `doc_model` 为二进制层主体，`value_model` 降为对象门面。
 
-**必须先摸清的接口面**（已调研，直接可用）：
+**✅ 第 1 步已完成（2026-09-12）：`core/marshal/value_layer.py` 落地**
 
-| 调用方 | 用到的值模型成员 |
+关键设计：值层对象**直接持有并改写 Node**（不是"值↔节点来回转换"），
+因此字节保真天然成立、且只有一份解析器。
+
+| 调用方 | 用到的值层接口（都已实现） |
 | --- | --- |
-| `core/formats/rgss_data.py` | `RMObject`（`.class_name`、`.ivars`（`str` 键，**无 `@` 前缀**））、`RMIvar`（`.value`）、`RMStr`（`.enc`）、`isinstance` 分派、`loads` / `dumps` |
-| `core/safety/builder.py` | `RMStr(text, enc=...)`、`RMIvar(value, {RMSymbol("E"): True, RMSymbol("encoding"): RMSymbol("UTF_8")})`、`RMSymbol(name)`、`dumps` |
-| `tests/compat/test_marshal_compat.py` | `loads` / `dumps` 的字节稳定性 |
-| `tests/compat/test_m2a_regressions.py` | `RMObject` / `RMStr` 构造 |
+| `core/formats/rgss_data.py` | `RMObject`（`.class_name`、`.ivars[...]`（`str` 键，**带不带 `@` 都能读**））、`RMIvar`（`.value`）、`RMStr`（`.value` / `.enc`）、`loads` / `dumps` |
+| `core/safety/builder.py` | `RMStr(text, enc=...)`、`RMIvar(value, {...})`、`RMSymbol(name)`、`dumps` —— ⚠ **注意**：`value_layer` 的 `RMStr`/`RMSymbol` 是**代理**（不给 `enc=` 关键字），`builder` 的字体注入需要改成"构造节点 + 指定编码"，或用 `unwrap_to_node` |
 
-**关键阻抗（这是本任务唯一的真难点）**：两份实现的 ivar 键表示不同 ——
-值模型用 `str` 且允许无 `@` 前缀；文档模型用 `Symbol` **节点**且名字带 `@`。
-门面层必须做双向映射（含 `SymLink` 解引用），并在往返中保持字节稳定。
+**剩余 4 步**：
 
-**建议实施顺序**（每步都能独立验证，避免一次改到底）：
-
-1. 在 `doc_model` 上补一个 `to_value()` / `from_value()` 转换层（先不改 `rgss_data`）
-2. 写测试：`value_model.loads(doc_model.dumps(node))` 与反向都必须字节稳定、字段等价
-3. 把 `rgss_data.py` 切到 `doc_model` 直连（去掉 `RMIvar`/`RMObject` 包装）
-4. 把 `builder.py` 的字体脚本注入改为直接构造 `ObjectNode`/`Symbol`
-5. 把 `loads`/`dumps` 的角色交给新门面；**删除 `value_model.py`**
-6. `CONVERGENCE_STATUS` 改为 `"merged"`，并加静态断言（禁止再有第二份实现）
+1. `core/formats/rgss_data.py`：`from ..marshal import value_model as marshal`
+   → 改用 `value_layer`（先跑通 `tests/compat/` 与 `test_standard_mode.py`）
+2. `core/safety/builder.py`：字体脚本注入改用 `value_layer` 构造节点
+   （`RMStr` 的编码指定方式见上表注意事项）
+3. 删除 `core/marshal/value_model.py`；`core/marshal/__init__.py` 的
+   `CONVERGENCE_STATUS` 置 `"merged"`
+4. 加静态断言（放在 `tests/compat/test_marshal_compat.py` 或新文件）：
+   * `core/marshal/` 下不得再有第二份实现（`value_model` 必须不存在）
+   * `rgss_data` / `builder` 不得再 import `value_model`
 
 **验收硬指标（需求 §3.3）**：
 * `tests/compat/test_marshal_compat.py` 的 **300 个真实 `.rvdata2` 零漂移**
 * `tests/compat/test_standard_mode.py` 的合成 VX/XP 样本往返
+* `tests/unit/test_marshal_value.py` 的 36 例（值层语义与字节保真）
 * `core/marshal/` 下只剩**一份**二进制实现
 
-**⚠ 已知陷阱（M2a 实测踩到，别再踩）**：
-* 文档模型的 `Float(value, tail)` 的 `value` 是**8 字节大端 IEEE754 原始字节**，
-  不是 float 对象
+**⚠ 已实测踩到的陷阱（别再踩）**：
+* 文档模型的 `Float(value, tail)` 的 `value` 是**8 字节大端 IEEE754 原始字节**
 * `ObjectNode.ivars` 是 **`(Symbol 节点, 值节点)` 的列表**，不是 dict
+* `Bignum(sign, digits)` 的 `sign` 是 `b'+'`/`b'-'`，`digits` 是 16 位数字组
 * 标准模式下单字节整数上限是 **117**（不是 122，见 N-10）
+* 代理之间比较（断言里）要用 `value_layer.to_plain()` 递归展开 ——
+  直接 `dict(items) == other` 会因为值是代理而恒不相等
 
 ### 7.2 消除 `core/_refbridge.py`（✅ **已完成**）
 

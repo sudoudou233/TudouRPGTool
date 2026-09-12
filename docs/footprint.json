@@ -400,6 +400,26 @@
       "note": "vendored：来自 rpgmaker_cheating_tool/rmarshal.py（原样搬入）。 已知缺陷 B-10（Parser._fixnum 重复定义，XP/VX 写回漂移） 在 M2a 修复；M2b 收敛后本文件删除。",
       "lines": 875
     },
+    "core/marshal/value_layer.py": {
+      "feature": "none",
+      "layer": "core",
+      "public": [
+        "RMObject",
+        "RMIvar",
+        "RMStr",
+        "RMSymbol",
+        "RMDict",
+        "RMStruct",
+        "RMUserDefined"
+      ],
+      "depends": [
+        "core.marshal.doc_model"
+      ],
+      "tested": "tests/unit/test_marshal_value.py",
+      "footprint": "docs/MODULES.md#coremarshal",
+      "vendored": false,
+      "lines": 784
+    },
     "core/marshal/value_model.py": {
       "feature": "none",
       "layer": "core",
