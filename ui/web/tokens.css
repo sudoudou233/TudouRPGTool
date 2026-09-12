@@ -1,0 +1,85 @@
+/* ---------------------------------------------------------------------------
+ * 设计令牌 —— 全站唯一真源（本文件不得出现具体组件的样式）
+ *
+ * @feature  none
+ * @layer    ui
+ * @public   --bg --card --card2 --line --text --muted --accent --accent2
+ *           --warn --danger --radius 以及由此派生的间距/字号/阴影令牌
+ * @depends  (none)
+ * @tested   tools/check_footprint.py（检查令牌是否被引用；禁止页面自定义配色）
+ * @footprint docs/UI_SPEC.md#tokens
+ *
+ * 视觉基线继承自 rpgmaker_translation_tool/web/index.html:8-12 已验证的暗色主题。
+ * 迁移时**修正**了原实现的三个问题（见 docs/M0-现状测绘.md §3.5）：
+ *   1. --warn 原只声明未使用  -> 本版补齐用途（.tag.warn / .chip.warn）
+ *   2. 11 处硬编码色值未令牌化 -> 本版全部收进令牌（原色值见下注释）
+ *   3. 禁止页面自定配色       -> 由 check_footprint.py 强制
+ * ------------------------------------------------------------------------- */
+
+:root {
+  /* ---- 基础色（值与原实现逐字一致，保证视觉不漂移） ---- */
+  --bg: #14161c;              /* 原 --bg */
+  --card: #1d212b;            /* 原 --card */
+  --card2: #232836;           /* 原 --card2 */
+  --line: #303648;            /* 原 --line */
+  --text: #e8eaf0;            /* 原 --text */
+  --muted: #9aa3b5;           /* 原 --muted */
+  --accent: #4f8cff;          /* 原 --accent，主色 */
+  --accent2: #6ec06e;         /* 原 --accent2 */
+  --warn: #e6a23c;            /* 原 --warn（补齐用途） */
+  --danger: #e06c75;          /* 原 --danger */
+  --radius: 10px;             /* 原 --radius */
+
+  /* ---- 由硬编码色值提升而来的令牌（原文件行号见注释） ---- */
+  --bg-deep: #14171f;         /* 原 index.html:36/61/83 */
+  --on-accent: #fff;          /* 原 index.html:24/32 */
+  --success-bg: #10240f;      /* 原 index.html:25 */
+  --input-bg: #2a2f3d;        /* 原 index.html:81/266 */
+  --overlay: rgba(0, 0, 0, .55);  /* 原 index.html:69 */
+  --code-bg: #14171f;
+
+  /* ---- 状态标签四态（原 index.html:57-60） ---- */
+  --tag-pending-fg: #b9c2d8;
+  --tag-pending-bg: #3a3f52;
+  --tag-translated-fg: #7fd38a;
+  --tag-translated-bg: #1e3a26;
+  --tag-skipped-fg: #d8b26a;
+  --tag-skipped-bg: #3a3020;
+  --tag-error-fg: #e08a92;
+  --tag-error-bg: #44262a;
+
+  /* ---- 间距刻度 ---- */
+  --sp-1: 4px;
+  --sp-2: 6px;
+  --sp-3: 8px;
+  --sp-4: 12px;
+  --sp-5: 16px;
+  --sp-6: 24px;
+
+  /* ---- 字号刻度 ---- */
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 18px;
+  --fs-2xl: 22px;
+
+  /* ---- 圆角派生 ---- */
+  --radius-sm: 6px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  /* ---- 阴影 ---- */
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, .02), 0 8px 24px rgba(0, 0, 0, .25);
+  --shadow-modal: 0 18px 60px rgba(0, 0, 0, .55);
+
+  /* ---- 字体：中文优先字体栈（沿用原实现） ---- */
+  --font-ui: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC",
+             "Hiragino Sans GB", "Source Han Sans SC", "Noto Sans CJK SC",
+             system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, "Courier New", ui-monospace, monospace;
+
+  /* ---- 布局 ---- */
+  --header-h: 56px;
+  --content-max: 1180px;
+}

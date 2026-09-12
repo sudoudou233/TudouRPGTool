@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<!--
+  RPG Maker 全能工具 —— 单页外壳
+
+  @feature  none
+  @layer    ui
+  @public   (页面骨架：#nav 导航挂载点、#view 页面容器、#toast 提示容器)
+  @depends  tokens.css, components.css, app.js
+  @tested   tests/unit/test_server.py（检查静态资源可服务且含关键挂载点）
+  @footprint docs/UI_SPEC.md#shell
+
+  设计取舍（docs/DECISIONS.md ADR-001）：本地 Web 主壳，无前端构建、无 CDN、
+  零第三方依赖。新增功能只需新增 ui/web/pages/<id>.js 并在功能 manifest
+  里声明 pages，本文件**永远不需要修改**（导航由 /api/nav 驱动）。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RPG Maker 全能工具</title>
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/components.css">
+</head>
+<body>
+  <header>
+    <h1>RPG Maker 全能工具</h1>
+    <span class="sub" id="app-version">加载中…</span>
+    <span class="spacer"></span>
+    <span class="chips" id="health-chips"></span>
+    <button class="btn sm" id="btn-refresh" type="button">刷新状态</button>
+  </header>
+
+  <main>
+    <nav class="nav" id="nav"></nav>
+
+    <section class="card" id="feature-status-card">
+      <h2>功能模块加载情况</h2>
+      <div class="card-sub">
+        由 <span class="code">features/&lt;name&gt;/manifest.py</span> 自我声明，
+        后端自动发现；本页面与导航均据此生成，新增功能不需要改动前端主脚本。
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>功能</th><th>ID</th><th>版本</th><th>状态</th>
+              <th>健康检查</th><th>声明的页面</th>
+            </tr>
+          </thead>
+          <tbody id="feature-rows">
+            <tr><td colspan="6" class="muted">加载中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="row" id="feature-errors" style="margin-top: var(--sp-4);"></div>
+    </section>
+
+    <div id="view"></div>
+
+    <section class="card">
+      <h2>诊断</h2>
+      <div class="row">
+        <button class="btn sm" id="btn-paths" type="button">显示工程路径</button>
+        <button class="btn sm" id="btn-health" type="button">完整健康检查</button>
+      </div>
+      <pre class="code" id="diag-out" style="margin-top: var(--sp-4); max-height: 340px; overflow: auto; display: none;"></pre>
+    </section>
+  </main>
+
+  <div id="toast"></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

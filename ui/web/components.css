@@ -1,0 +1,339 @@
+/* ---------------------------------------------------------------------------
+ * 共享组件库 —— 所有页面只能使用这里定义的类（禁止孤立样式）
+ *
+ * @feature  none
+ * @layer    ui
+ * @public   .btn .card .row .field .grid .check .chips .chip .table-wrap table
+ *           .tag .progress .modal-mask .modal #toast .muted .error-text
+ *           .hint .pager .nav .nav-item .kpi .empty .code
+ * @depends  tokens.css
+ * @tested   tools/check_footprint.py（检查页面是否引入了未登记的自定义样式）
+ * @footprint docs/UI_SPEC.md#components
+ *
+ * 迁移来源：rpgmaker_translation_tool/web/index.html:13-83 的组件样式，
+ * 但做了三点整理：
+ *   1. 删除死样式：.dir-item 系列（原 :76-79）、.progress.success（原 :63）、
+ *      .ok-text（原 :66）—— 全仓零引用（见 docs/M0-现状测绘.md §3.5）
+ *   2. 所有硬编码色值改用 tokens.css 的令牌
+ *   3. 补齐原实现缺失的组件：.nav / .nav-item（多页导航）、.kpi（指标卡）、
+ *      .empty（空状态）、.code（等宽路径展示）
+ * ------------------------------------------------------------------------- */
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
+  line-height: 1.55;
+}
+
+a { color: var(--accent); }
+
+/* ---------------------------------------------------------------- 顶栏 */
+header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  height: var(--header-h);
+  padding: 0 var(--sp-5);
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+header h1 {
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: .5px;
+}
+header .sub {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.spacer { flex: 1; }
+
+/* ---------------------------------------------------------------- 布局 */
+main {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--sp-4);
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.field > label {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+/* ---------------------------------------------------------------- 导航 */
+.nav {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.nav-item {
+  padding: var(--sp-2) var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--card2);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  transition: background .12s, color .12s, border-color .12s;
+}
+.nav-item:hover { color: var(--text); border-color: var(--accent); }
+.nav-item.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.nav-item .icon { margin-right: var(--sp-1); }
+.nav-item.disabled { opacity: .45; cursor: not-allowed; }
+
+/* ---------------------------------------------------------------- 按钮 */
+.btn {
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--card2);
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--fs-md);
+  transition: filter .12s, background .12s;
+}
+.btn:hover { filter: brightness(1.15); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn.success { background: var(--success-bg); border-color: var(--accent2); color: var(--accent2); }
+.btn.danger { background: transparent; border-color: var(--danger); color: var(--danger); }
+.btn:disabled { opacity: .5; cursor: not-allowed; filter: none; }
+.btn.sm { padding: 2px var(--sp-3); font-size: var(--fs-sm); }
+
+/* ---------------------------------------------------------------- 卡片 */
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--sp-5);
+  box-shadow: var(--shadow-card);
+}
+.card h2 {
+  margin: 0 0 var(--sp-4);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.card h2 .step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: var(--fs-sm);
+}
+.card .card-sub { color: var(--muted); font-size: var(--fs-sm); margin-bottom: var(--sp-4); }
+.card + .card { margin-top: 0; }
+
+/* ---------------------------------------------------------------- 表单控件 */
+input[type=text], input[type=number], input[type=password], select, textarea {
+  background: var(--input-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: var(--sp-2) var(--sp-3);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  min-width: 0;
+}
+input[type=text]:focus, input[type=number]:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+input[type=text] { flex: 1; }
+input[type=number] { width: 120px; }
+textarea { width: 100%; resize: vertical; font-family: var(--font-ui); }
+input[type=checkbox], input[type=radio] { accent-color: var(--accent); }
+
+/* ---------------------------------------------------------------- 指标胶囊 */
+.chips { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+.chip {
+  background: var(--card2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  padding: 2px var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.chip b { color: var(--text); font-weight: 600; }
+.chip.warn { border-color: var(--warn); color: var(--warn); }
+.chip.danger { border-color: var(--danger); color: var(--danger); }
+.chip.ok { border-color: var(--accent2); color: var(--accent2); }
+
+.kpi { display: flex; flex-direction: column; gap: 2px; }
+.kpi .kpi-value { font-size: var(--fs-2xl); font-weight: 600; }
+.kpi .kpi-label { color: var(--muted); font-size: var(--fs-sm); }
+
+/* ---------------------------------------------------------------- 表格 */
+.table-wrap {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: auto;
+  max-height: 60vh;
+}
+table { width: 100%; border-collapse: collapse; font-size: var(--fs-md); }
+th, td { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--line); text-align: left; }
+th {
+  position: sticky;
+  top: 0;
+  background: var(--card2);
+  color: var(--muted);
+  font-weight: 600;
+  z-index: 1;
+}
+tbody tr:hover { background: var(--card2); }
+td.num { text-align: right; font-family: var(--font-mono); }
+
+/* ---------------------------------------------------------------- 状态标签 */
+.tag {
+  display: inline-block;
+  padding: 1px var(--sp-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+.tag.pending { background: var(--tag-pending-bg); color: var(--tag-pending-fg); }
+.tag.translated { background: var(--tag-translated-bg); color: var(--tag-translated-fg); }
+.tag.skipped { background: var(--tag-skipped-bg); color: var(--tag-skipped-fg); }
+.tag.error { background: var(--tag-error-bg); color: var(--tag-error-fg); }
+.tag.warn { background: var(--tag-skipped-bg); color: var(--warn); }
+.tag.ok { background: var(--tag-translated-bg); color: var(--accent2); }
+
+/* ---------------------------------------------------------------- 进度条 */
+.progress {
+  height: 8px;
+  background: var(--input-bg);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+.progress > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width .2s;
+}
+
+/* ---------------------------------------------------------------- 模态框 */
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.modal {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+  min-width: 380px;
+  max-width: min(680px, 92vw);
+}
+.modal h3 { margin: 0; padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--line); font-size: var(--fs-lg); }
+.modal .body { padding: var(--sp-5); }
+.modal .foot {
+  padding: var(--sp-4) var(--sp-5);
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: var(--sp-3);
+  justify-content: flex-end;
+}
+
+/* ---------------------------------------------------------------- Toast */
+#toast {
+  position: fixed;
+  right: var(--sp-5);
+  bottom: var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  z-index: 60;
+}
+#toast .toast {
+  background: var(--card2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-3) var(--sp-4);
+  max-width: 420px;
+  box-shadow: var(--shadow-modal);
+  font-size: var(--fs-md);
+}
+#toast .toast.error { border-left-color: var(--danger); }
+#toast .toast.ok { border-left-color: var(--accent2); }
+#toast .toast.warn { border-left-color: var(--warn); }
+
+/* ---------------------------------------------------------------- 工具类 */
+.muted { color: var(--muted); }
+.error-text { color: var(--danger); }
+.warn-text { color: var(--warn); }
+.ok-text { color: var(--accent2); }
+.hint { color: var(--muted); font-size: var(--fs-sm); }
+.mono { font-family: var(--font-mono); }
+.pager { display: flex; align-items: center; gap: var(--sp-3); color: var(--muted); font-size: var(--fs-sm); }
+.code {
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  word-break: break-all;
+}
+.empty {
+  padding: var(--sp-6);
+  text-align: center;
+  color: var(--muted);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+}
+.divider { height: 1px; background: var(--line); margin: var(--sp-4) 0; border: 0; }
+.nowrap { white-space: nowrap; }

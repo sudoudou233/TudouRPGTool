@@ -1,0 +1,848 @@
+{
+  "schema": 1,
+  "project": {
+    "name": "RPG Maker 全能工具",
+    "package": "tudou_rpgtool",
+    "root_relative": ".",
+    "language": "python",
+    "min_python": "3.8",
+    "third_party_deps": [],
+    "entry": "app.py"
+  },
+  "generated_by": "tools/gen_footprint.py",
+  "sources": {
+    "roots": [
+      "core",
+      "features",
+      "ui",
+      "tools"
+    ],
+    "top_level": [
+      "app.py"
+    ],
+    "static": [
+      "ui/web/index.html",
+      "ui/web/app.js",
+      "ui/web/dom.js",
+      "ui/web/tokens.css",
+      "ui/web/components.css"
+    ]
+  },
+  "layers": {
+    "app": "唯一入口：装配 core/ui/features 并启动服务（app.py）",
+    "core": "与界面无关的纯逻辑；不得 import ui 或 features（F-09 强制）",
+    "features": "可插拔功能模块；通过 manifest.py 的 register(ctx) 装配",
+    "ui": "界面层：HTTP 服务 + 静态资源 + 页面模块",
+    "tools": "开发期脚本（足迹校验、生成器）；不参与运行时"
+  },
+  "commands": {
+    "footprint": "python tools/check_footprint.py",
+    "unit": "python tests/run_all.py --suite unit",
+    "compat": "python tests/run_all.py --suite compat",
+    "features": "python tests/run_all.py --suite features",
+    "integration": "python tests/run_all.py --suite integration",
+    "all": "python tests/run_all.py",
+    "selfcheck": "python app.py --check",
+    "sample_compare": "python tests/local/compare_engines.py  （需真实样本，见 docs/DECISIONS.md ADR-005）"
+  },
+  "features": {
+    "cheats": {
+      "id": "cheats",
+      "name": "存档修改",
+      "icon": "改",
+      "version": "0.1.0",
+      "description": "读取存档并修改金币、步数、道具/武器/防具数量、角色属性与技能、开关与变量；保存前自动备份。",
+      "order": 20,
+      "core_deps": [
+        "core.engines",
+        "core.constants",
+        "core.formats.mv_save",
+        "core.formats.rgss_save",
+        "core.formats.lzstring",
+        "core.marshal.doc_model",
+        "core.safety.atomic"
+      ],
+      "api_prefix": "/api/cheats",
+      "pages": [
+        {
+          "id": "cheats",
+          "title": "存档修改",
+          "icon": "改",
+          "module": "cheats",
+          "order": 20
+        }
+      ],
+      "enabled": true,
+      "directory": "features/cheats",
+      "manifest": "features/cheats/manifest.py",
+      "tests": "tests/features/cheats"
+    },
+    "translate": {
+      "id": "translate",
+      "name": "文本翻译",
+      "icon": "文",
+      "version": "0.1.0",
+      "description": "扫描游戏内全部文本，批量翻译后生成汉化版；支持 MV / MZ / VX Ace / XP 与加密 JSON 包装。",
+      "order": 10,
+      "core_deps": [
+        "core.engines",
+        "core.textutil",
+        "core.formats.mv_mz_data",
+        "core.formats.rgss_data",
+        "core.marshal.value_model",
+        "core.safety.backup",
+        "core.safety.atomic"
+      ],
+      "api_prefix": "/api/translate",
+      "pages": [
+        {
+          "id": "translate",
+          "title": "文本翻译",
+          "icon": "文",
+          "module": "translate",
+          "order": 10
+        }
+      ],
+      "enabled": true,
+      "directory": "features/translate",
+      "manifest": "features/translate/manifest.py",
+      "tests": "tests/features/translate"
+    }
+  },
+  "files": {
+    "app.py": {
+      "feature": "none",
+      "layer": "app",
+      "public": [
+        "App",
+        "main",
+        "build_app"
+      ],
+      "depends": [
+        "core.*",
+        "features.*",
+        "ui.server",
+        "ui.routes"
+      ],
+      "tested": "tests/unit/test_app.py, tests/integration/test_startup.py",
+      "footprint": "docs/ARCHITECTURE.md#entry",
+      "vendored": false,
+      "lines": 320
+    },
+    "core/__init__.py": {
+      "feature": "none",
+      "layer": "core",
+      "public": [
+        "__version__",
+        "LAYER"
+      ],
+      "depends": [
+        "(stdlib only)"
+      ],
+      "tested": "tests/unit/",
+      "footprint": "docs/ARCHITECTURE.md#core",
+      "vendored": false,
+      "lines": 34
+    },
+    "core/_refbridge.py": {
+      "feature": "none",
+      "layer": "core",
+      "public": [
+        "ReferenceUnavailable",
+        "load_reference",
+        "reference_status"
+      ],
+      "depends": [
+        "core.paths"
+      ],
+      "tested": "tests/unit/test_refbridge.py",
+      "footprint": "docs/MODULES.md#core_refbridge",
+      "vendored": false,
+      "note": "临时模块。M2b 把 marshal / formats / safety 收敛进本工程后，",
+      "lines": 130
+    },
+    "core/config.py": {
+      "feature": "none",
+      "layer": "core",
+      "public": [
+        "AppConfig",
+        "load_config",
+        "save_config",
+        "DEFAULTS",
+        "redacted"
+      ],
+      "depends": [
+        "(stdlib only)"
+      ],
+      "tested": "tests/unit/test_config.py",
+      "footprint": "docs/MODULES.md#coreconfig",
+      "vendored": false,
+      "lines": 194
+    },
+    "core/constants.py": {
+      "feature": "none",
+      "layer": "core",
+      "public": [
+        "ENGINES",
+        "ENGINE_ORDER",
+        "SAVE_PATTERNS",
+        "PARAMS",
+        "PARAM_LABELS",
+        "engine_label"
+      ],
+      "depends": [
+        "(stdlib only)"
+      ],
+      "tested": "tests/unit/test_config.py",
+      "footprint": "docs/MODULES.md#coreconstants",
+      "vendored": false,
+      "lines": 87
+    },
+    "core/context.py": {
+      "feature": "none",
+      "layer": "core",
+      "public": [
+        "Router",
+        "Route",
+        "PageSpec",
+        "AppContext"
+      ],
+      "depends": [
+        "core.paths"
+      ],
+      "tested": "tests/unit/test_registry.py",
+      "footprint": "docs/MODULES.md#corecontext",
+      "vendored": false,
+      "lines": 228
+    },
+    "core/engines.py": {
+      "feature": "none",
+      "layer": "core",
+      "public": [
+        "detect",
+        "detect_engine",
+        "describe",
+        "list_saves",
+        "find_save_dirs",
+        "data_dir",
+        "save_dir"
+      ],
+      "depends": [
+        "core.constants"
+      ],
+      "tested": "tests/unit/test_engines.py",
+      "footprint": "docs/MODULES.md#coreengines",
+      "vendored": false,
+      "lines": 360
+    },
+    "core/formats/__init__.py": {
+      "feature": "none",
+      "layer": "core",
+      "public": [
+        "lzstring",
+        "mv_mz_data",
+        "rgss_data",
+        "mv_save",
+        "rgss_save"
+      ],
+      "depends": [
+        "core.textutil",
+        "core.marshal"
+      ],
+      "tested": "tests/compat/test_formats_compat.py",
+      "footprint": "docs/MODULES.md#coreformats",
+      "vendored": false,
+      "lines": 37
+    },
+    "core/formats/lzstring.py": {
+      "feature": "cheats",
+      "layer": "core",
+      "public": [
+        "compress",
+        "decompress",
+        "compress_to_base64",
+        "decompress_from_base64"
+      ],
+      "depends": [
+        "(stdlib only)"
+      ],
+      "tested": "tests/compat/test_formats_compat.py",
+      "footprint": "docs/MODULES.md#coreformats",
+      "vendored": true,
+      "note": "vendored：来自 rpgmaker_cheating_tool/lzstring.py。",
+      "lines": 283
+    },
+    "core/formats/mv_mz_data.py": {
+      "feature": "translate",
+      "layer": "core",
+      "public": [
+        "extract",
+        "apply_to_files",
+        "TEXT_CODES",
+        "WRAPPER_KEYS"
+      ],
+      "depends": [
+        "core.textutil"
+      ],
+      "tested": "tests/compat/test_formats_compat.py",
+      "footprint": "docs/MODULES.md#coreformats",
+      "vendored": true,
+      "note": "vendored：来自 rpgmaker_translation_tool/tool/mv_mz.py。 M2b 抽出 core/formats/jsoncodec.py 后本文件只保留业务规则。",
+      "lines": 367
+    },
+    "core/formats/mv_save.py": {
+      "feature": "cheats",
+      "layer": "core",
+      "public": [
+        "GameDataMV",
+        "SaveFileMV",
+        "META_KEYS"
+      ],
+      "depends": [
+        "core.formats.lzstring"
+      ],
+      "tested": "tests/compat/test_formats_compat.py",
+      "footprint": "docs/MODULES.md#coreformats",
+      "vendored": true,
+      "note": "vendored：来自 rpgmaker_cheating_tool/mvdata.py。",
+      "lines": 288
+    },
+    "core/formats/rgss_data.py": {
+      "feature": "translate",
+      "layer": "core",
+      "public": [
+        "extract",
+        "apply_to_files"
+      ],
+      "depends": [
+        "core.textutil",
+        "core.marshal.value_model",
+        "core.formats.mv_mz_data"
+      ],
+      "tested": "tests/compat/test_formats_compat.py",
+      "footprint": "docs/MODULES.md#coreformats",
+      "vendored": true,
+      "note": "vendored：来自 rpgmaker_translation_tool/tool/vxace.py。 已知缺陷 B-02（非原子写）、B-13（original 参数未用于校验）。",
+      "lines": 303
+    },
+    "core/formats/rgss_save.py": {
+      "feature": "cheats",
+      "layer": "core",
+      "public": [
+        "GameData",
+        "SaveFile",
+        "sync_dirty",
+        "find_top_hash"
+      ],
+      "depends": [
+        "core.marshal.doc_model"
+      ],
+      "tested": "tests/compat/test_formats_compat.py",
+      "footprint": "docs/MODULES.md#coreformats",
+      "vendored": true,
+      "note": "vendored：来自 rpgmaker_cheating_tool/rpgdata.py。",
+      "lines": 465
+    },
+    "core/jobs.py": {
+      "feature": "none",
+      "layer": "core",
+      "public": [
+        "CancelToken",
+        "Cancelled",
+        "Job",
+        "JobManager"
+      ],
+      "depends": [
+        "(stdlib only)"
+      ],
+      "tested": "tests/unit/test_jobs.py",
+      "footprint": "docs/MODULES.md#corejobs",
+      "vendored": false,
+      "lines": 365
+    },
+    "core/marshal/__init__.py": {
+      "feature": "none",
+      "layer": "core",
+      "public": [
+        "doc_model",
+        "value_model"
+      ],
+      "depends": [
+        "(stdlib only)"
+      ],
+      "tested": "tests/compat/test_marshal_compat.py",
+      "footprint": "docs/MODULES.md#coremarshal",
+      "vendored": false,
+      "lines": 44
+    },
+    "core/marshal/doc_model.py": {
+      "feature": "none",
+      "layer": "core",
+      "public": [
+        "Node",
+        "Parser",
+        "loads",
+        "dumps",
+        "load_streams",
+        "mark_dirty",
+        "VERSION"
+      ],
+      "depends": [
+        "(stdlib only)"
+      ],
+      "tested": "tests/compat/test_marshal_compat.py",
+      "footprint": "docs/MODULES.md#coremarshal",
+      "vendored": true,
+      "note": "vendored：来自 rpgmaker_cheating_tool/rmarshal.py（原样搬入）。 已知缺陷 B-10（Parser._fixnum 重复定义，XP/VX 写回漂移） 在 M2a 修复；M2b 收敛后本文件删除。",
+      "lines": 712
+    },
+    "core/marshal/value_model.py": {
+      "feature": "none",
+      "layer": "core",
+      "public": [
+        "loads",
+        "dumps",
+        "RMStr",
+        "RMIvar",
+        "RMObject",
+        "RMDict",
+        "RMSymbol",
+        "RMStruct",
+        "RMUserDefined",
+        "RMUserMarshal",
+        "RMRegexp",
+        "RMData",
+        "RMClass",
+        "RMModule",
+        "RMFloat"
+      ],
+      "depends": [
+        "(stdlib only)"
+      ],
+      "tested": "tests/compat/test_marshal_compat.py",
+      "footprint": "docs/MODULES.md#coremarshal",
+      "vendored": true,
+      "note": "vendored：来自 rpgmaker_translation_tool/tool/marshal.py（原样搬入）。 已知缺陷 B-12（bignum 写回崩溃）、B-13、B-28（gbk→cp932 误映射） 在 M2b 收敛时随门面层一并处置。",
+      "lines": 708
+    },
+    "core/paths.py": {
+      "feature": "none",
+      "layer": "core",
+      "public": [
+        "project_root",
+        "data_dir",
+        "sessions_dir",
+        "web_dir",
+        "logs_dir",
+        "reference_roots"
+      ],
+      "depends": [
+        "(stdlib only)"
+      ],
+      "tested": "tests/unit/test_paths.py",
+      "footprint": "docs/MODULES.md#corepaths",
+      "vendored": false,
+      "lines": 173
+    },
+    "core/registry.py": {
+      "feature": "none",
+      "layer": "core",
+      "public": [
+        "FootprintMeta",
+        "FeatureModule",
+        "Registry",
+        "discover",
+        "get_registry"
+      ],
+      "depends": [
+        "core.paths"
+      ],
+      "tested": "tests/unit/test_registry.py",
+      "footprint": "docs/MODULES.md#coreregistry",
+      "vendored": false,
+      "lines": 440
+    },
+    "core/safety/__init__.py": {
+      "feature": "none",
+      "layer": "core",
+      "public": [
+        "atomic",
+        "backup",
+        "fontutil"
+      ],
+      "depends": [
+        "core.paths",
+        "core.marshal.value_model"
+      ],
+      "tested": "tests/unit/test_atomic.py",
+      "footprint": "docs/MODULES.md#coresafety",
+      "vendored": false,
+      "lines": 28
+    },
+    "core/safety/atomic.py": {
+      "feature": "none",
+      "layer": "core",
+      "public": [
+        "atomic_write_bytes",
+        "atomic_write_text",
+        "AtomicWriteError",
+        "SafeTargetError"
+      ],
+      "depends": [
+        "core.paths"
+      ],
+      "tested": "tests/unit/test_atomic.py",
+      "footprint": "docs/MODULES.md#coresafety",
+      "vendored": false,
+      "lines": 203
+    },
+    "core/safety/backup.py": {
+      "feature": "translate",
+      "layer": "core",
+      "public": [
+        "build",
+        "backup_files",
+        "restore_backup",
+        "list_backups",
+        "apply_font",
+        "default_target_dir",
+        "resolve_target_dir",
+        "next_free_dir",
+        "BACKUP_PREFIX"
+      ],
+      "depends": [
+        "core.marshal.value_model",
+        "core.safety.fontutil"
+      ],
+      "tested": "tests/compat/test_build_backup.py",
+      "footprint": "docs/MODULES.md#coresafety",
+      "vendored": true,
+      "note": "vendored：来自 rpgmaker_translation_tool/tool/build.py。 已知缺陷（M2a 必修）：B-01（rmtree 先删后拷）、B-03（字体兜底 覆盖不可还原）、B-04（还原不完整）、B-05（覆盖无二次确认）、 B-06（无回滚）、B-26（模块顶层 import winreg，非 Windows 失败）。",
+      "lines": 413
+    },
+    "core/safety/fontutil.py": {
+      "feature": "translate",
+      "layer": "core",
+      "public": [
+        "extract_family",
+        "safe_filename"
+      ],
+      "depends": [
+        "(stdlib only)"
+      ],
+      "tested": "tests/compat/test_build_backup.py",
+      "footprint": "docs/MODULES.md#coresafety",
+      "vendored": true,
+      "note": "vendored：来自 rpgmaker_translation_tool/tool/fontutil.py。",
+      "lines": 132
+    },
+    "core/textutil.py": {
+      "feature": "translate",
+      "layer": "core",
+      "public": [
+        "CONTROL_RE",
+        "split_text",
+        "has_real_text",
+        "collect_segments",
+        "rebuild"
+      ],
+      "depends": [
+        "(stdlib only)"
+      ],
+      "tested": "tests/unit/test_textutil.py",
+      "footprint": "docs/MODULES.md#coretextutil",
+      "vendored": true,
+      "note": "vendored：来自 rpgmaker_translation_tool/tool/textutil.py。 已知问题见 docs/M0-现状测绘.md section 3.5：原注释声称支持 \\{ \\} \\^ \\| \\. \\! \\> \\< \\$ 这些符号型转义，但 CONTROL_RE 要求反斜杠后必须是字母，因此它们从不被匹配（M2a 处置）。 原 translate_segments() 是全仓零调用的死代码，未搬入。",
+      "lines": 121
+    },
+    "features/__init__.py": {
+      "feature": "none",
+      "layer": "features",
+      "public": [
+        "LAYER",
+        "REQUIRED_FILE"
+      ],
+      "depends": [
+        "(stdlib only)"
+      ],
+      "tested": "tests/unit/test_registry.py",
+      "footprint": "docs/ARCHITECTURE.md#features",
+      "vendored": false,
+      "lines": 34
+    },
+    "features/cheats/__init__.py": {
+      "feature": "cheats",
+      "layer": "features",
+      "public": [
+        "manifest"
+      ],
+      "depends": [
+        "core.*"
+      ],
+      "tested": "tests/features/cheats/",
+      "footprint": "docs/FEATURES.md#cheats",
+      "vendored": false,
+      "lines": 17
+    },
+    "features/cheats/manifest.py": {
+      "feature": "cheats",
+      "layer": "features",
+      "public": [
+        "MANIFEST",
+        "register",
+        "health"
+      ],
+      "depends": [
+        "core.engines",
+        "core.formats.mv_save",
+        "core.formats.rgss_save",
+        "core.safety"
+      ],
+      "tested": "tests/features/cheats/",
+      "footprint": "docs/FEATURES.md#cheats",
+      "vendored": false,
+      "lines": 115
+    },
+    "features/translate/__init__.py": {
+      "feature": "translate",
+      "layer": "features",
+      "public": [
+        "manifest"
+      ],
+      "depends": [
+        "core.*"
+      ],
+      "tested": "tests/features/translate/",
+      "footprint": "docs/FEATURES.md#translate",
+      "vendored": false,
+      "lines": 17
+    },
+    "features/translate/manifest.py": {
+      "feature": "translate",
+      "layer": "features",
+      "public": [
+        "MANIFEST",
+        "register",
+        "health"
+      ],
+      "depends": [
+        "core.engines",
+        "core.formats",
+        "core.safety",
+        "core.textutil"
+      ],
+      "tested": "tests/features/translate/",
+      "footprint": "docs/FEATURES.md#translate",
+      "vendored": false,
+      "lines": 112
+    },
+    "features/translate/session.py": {
+      "feature": "translate",
+      "layer": "features",
+      "public": [
+        "Session",
+        "ScanOptions",
+        "DEFAULT_OPTIONS"
+      ],
+      "depends": [
+        "core.engines",
+        "core.formats.mv_mz_data",
+        "core.formats.rgss_data"
+      ],
+      "tested": "tests/features/translate/",
+      "footprint": "docs/FEATURES.md#translate",
+      "vendored": true,
+      "note": "vendored：来自 rpgmaker_translation_tool/tool/session.py。 注意 engines.detect 的返回结构已是新 core 的统一结构， M3a 需核对 info 字段使用点（原实现用 engine_name/supported）。",
+      "lines": 147
+    },
+    "features/translate/translators.py": {
+      "feature": "translate",
+      "layer": "features",
+      "public": [
+        "build_translator",
+        "translate_entries",
+        "TranslateError",
+        "TruncatedError",
+        "GoogleTranslator",
+        "OpenAICompatibleTranslator",
+        "DeepLTranslator",
+        "_http"
+      ],
+      "depends": [
+        "core.textutil",
+        "core.safety.backup"
+      ],
+      "tested": "tests/features/translate/",
+      "footprint": "docs/FEATURES.md#translate",
+      "vendored": true,
+      "note": "vendored：来自 rpgmaker_translation_tool/tool/translators.py。 M3a 接线时改为按功能模块暴露 register(ctx)。",
+      "lines": 473
+    },
+    "tools/_m1_fix_future_imports.py": {
+      "feature": "none",
+      "layer": "tools",
+      "public": [
+        "PLAN",
+        "main"
+      ],
+      "depends": [
+        "(stdlib only)"
+      ],
+      "tested": "(一次性脚本)",
+      "footprint": "docs/DEVLOG.md",
+      "vendored": true,
+      "note": "前一版 tools/_m1_patch_vendored.py 把足迹头当作\"第二个字符串表达式\"",
+      "lines": 301
+    },
+    "tools/_m1_fix_test_root.py": {
+      "feature": "none",
+      "layer": "tools",
+      "public": [
+        "PATTERN",
+        "PATTERN4",
+        "REPLACEMENT",
+        "main"
+      ],
+      "depends": [
+        "(stdlib only)"
+      ],
+      "tested": "(一次性脚本)",
+      "footprint": "docs/DEVLOG.md",
+      "vendored": false,
+      "note": "原写法用固定层数 ``dirname(dirname(dirname(__file__)))`` 推工程根，",
+      "lines": 66
+    },
+    "tools/_m1_patch_features.py": {
+      "feature": "none",
+      "layer": "tools",
+      "public": [
+        "PLAN",
+        "main"
+      ],
+      "depends": [
+        "(stdlib only)"
+      ],
+      "tested": "(一次性脚本)",
+      "footprint": "docs/DEVLOG.md",
+      "vendored": false,
+      "note": "M1 先只做静态可导入性保障；真正的功能接线在 M3a。",
+      "lines": 157
+    },
+    "tools/_m1_sync_tested.py": {
+      "feature": "none",
+      "layer": "tools",
+      "public": [
+        "MAPPING",
+        "main"
+      ],
+      "depends": [
+        "(stdlib only)"
+      ],
+      "tested": "(一次性脚本)",
+      "footprint": "docs/DEVLOG.md",
+      "vendored": false,
+      "note": "M1 收尾用。check_footprint 的 F-08 会校验 @tested 指向的路径必须",
+      "lines": 110
+    },
+    "tools/check_footprint.py": {
+      "feature": "none",
+      "layer": "tools",
+      "public": [
+        "Checker",
+        "main",
+        "RULES"
+      ],
+      "depends": [
+        "core.registry",
+        "core.paths"
+      ],
+      "tested": "tests/unit/test_check_footprint.py",
+      "footprint": "docs/DEVLOG.md",
+      "vendored": false,
+      "lines": 571
+    },
+    "tools/gen_footprint.py": {
+      "feature": "none",
+      "layer": "tools",
+      "public": [
+        "build_footprint",
+        "main"
+      ],
+      "depends": [
+        "core.paths",
+        "tools/check_footprint.py"
+      ],
+      "tested": "tests/unit/test_check_footprint.py",
+      "footprint": "docs/MODULES.md#toolsgen_footprint",
+      "vendored": false,
+      "lines": 206
+    },
+    "ui/__init__.py": {
+      "feature": "none",
+      "layer": "ui",
+      "public": [
+        "server",
+        "routes"
+      ],
+      "depends": [
+        "core.*"
+      ],
+      "tested": "tests/unit/test_server.py",
+      "footprint": "docs/ARCHITECTURE.md#ui",
+      "vendored": false,
+      "lines": 27
+    },
+    "ui/routes.py": {
+      "feature": "none",
+      "layer": "ui",
+      "public": [
+        "register_core_routes"
+      ],
+      "depends": [
+        "core.paths",
+        "core.registry",
+        "core.jobs",
+        "ui.server"
+      ],
+      "tested": "tests/unit/test_server.py",
+      "footprint": "docs/MODULES.md#uiroutes",
+      "vendored": false,
+      "lines": 146
+    },
+    "ui/server.py": {
+      "feature": "none",
+      "layer": "ui",
+      "public": [
+        "Request",
+        "Response",
+        "JsonApiServer",
+        "start",
+        "make_server"
+      ],
+      "depends": [
+        "core.context",
+        "core.jobs",
+        "core.paths",
+        "core.registry"
+      ],
+      "tested": "tests/unit/test_server.py",
+      "footprint": "docs/MODULES.md#uiserver",
+      "vendored": false,
+      "lines": 447
+    }
+  },
+  "documents": {
+    "AGENTS.md": "给下一个 AI 的开工指令",
+    "docs/STATE.md": "当前状态快照（接手第一份要读的文件）",
+    "docs/ARCHITECTURE.md": "分层、数据流、模块依赖图、关键设计取舍",
+    "docs/MODULES.md": "模块地图：文件 → 职责 → 公开 API → 谁调用 → 影响面",
+    "docs/FEATURES.md": "功能注册表（含新增功能的完整步骤）",
+    "docs/DECISIONS.md": "决策记录 ADR",
+    "docs/DEVLOG.md": "开发足迹（追加式时间线 + 迁移对照表）",
+    "docs/UI_SPEC.md": "设计令牌、组件清单、页面清单、交互范式",
+    "docs/ROADMAP.md": "已规划未做的功能与预留扩展点",
+    "docs/OPEN-QUESTIONS.md": "需人类裁决的事项",
+    "docs/M0-现状测绘.md": "M0 现状测绘报告（两个原工具的完整测绘）",
+    "docs/迁移对照表.md": "原工具功能 → 新工程位置 → 测试 → 验证状态"
+  }
+}
