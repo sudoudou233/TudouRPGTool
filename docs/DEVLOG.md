@@ -5,6 +5,84 @@
 
 ---
 
+## 2026-09-13 ｜ M3a 完成：翻译页面接线（五张卡片），全链路在界面走通
+
+### 改了什么
+
+| 文件 | 变更 |
+| --- | --- |
+| `ui/web/pages/translate.js` | 从 M1 骨架（82 行、3 张展示卡）重写为**真实功能页**（~700 行、5 张卡片）：① 游戏目录（粘贴路径 + 原生「浏览…」+ 打开并识别，胶囊显示引擎/数据目录/条目计数）② 扫描与文本列表（4 个内容开关、搜索/类别/状态筛选、分页、行内改译文、逐条跳过与恢复、批量跳过）③ 翻译设置（引擎/Key/地址/模型/语言/并发/批大小 + 保存 + 接口自检 + 开始翻译/只重试出错/全部重译）④ 生成汉化版（写入方式默认写副本、输出目录、可选字体、生成后展示输出目录与**备份路径**、备份列表可还原）⑤ 任务进度（进度条 + 百分比 + 阶段文案 + 耗时 + **取消**，失败显示 `job.error` 与 `traceback_tail`） |
+| `tests/integration/test_translate_page.py`（新，23 例） | **页面静态契约**测试：页面 ↔ 后端**双向**一致、破坏性操作必须有二次确认、默认零破坏、密钥不回显、无硬编码颜色、无调试残留 |
+| `docs/UI_SPEC.md` | §4 页面清单更新为"已接线"，新增 §4.1 五张卡片的定稿（含每张卡对应的端点） |
+| `docs/STATE.md` | M3a 标记完成；§7 改为"M3a 已完成 + M3b 待做"的形态，并给出 M3b 的落地建议 |
+
+### 为什么这样写
+
+**1) 前端没有测试框架，但前端最容易错的地方恰好是静态可查的。**
+
+本工程零第三方依赖（连测试也不许引 `requests`），所以不引 npm / playwright。
+但"点了没反应"这类问题的根因几乎都是静态的：
+
+| 症状 | 静态可查的根因 | 本文件的断言 |
+| --- | --- | --- |
+| 点按钮没反应 / 404 toast | 页面调了后端**不存在**的端点 | `test_every_called_endpoint_exists` |
+| 后端写了接口但界面上找不到入口 | **死接口**（实现了却没人用） | `test_every_feature_endpoint_is_used_or_excused`（反向核对） |
+| 违反硬约束 §4.2 | 覆盖/还原漏了二次确认 | `test_overwrite_requires_confirm_dialog` 等 |
+| 用户以为"翻完了"其实没翻 | 漏 `await runJob(...)`：界面立刻显示完成，任务还在跑 | `test_every_long_task_call_is_awaited` |
+| `escapeHTML is not a function` | `import` 了 `dom.js` 里不存在的符号 —— **浏览器只在点到那一行时才报** | `test_imported_symbols_all_exist_in_dom_js` |
+| 视觉漂移 | 页面里写死颜色值 | `test_no_inline_colour_values` |
+
+**2) 后端路由表是"真装配"取来的，不维护第二份清单。**
+
+测试通过真实的 `Registry` + `ui_routes.register_core_routes(ctx)` 装配后取
+`router.routes()`，因此它断言的是**运行时事实**：如果有人改了端点路径而没改页面，
+这条测试立刻红。
+
+**3) "默认零破坏"在代码层面钉住，而不是靠文案。**
+
+`test_default_mode_is_copy` 直接断言下拉里第一个 `<option>` 的 `value` 是 `copy`
+—— 因为默认选中的就是第一项。想改成默认覆盖，必须先改这条测试，
+从而强制作者面对"这是破坏性默认值"这件事。
+
+### 怎么验证
+
+```powershell
+python tests/run_all.py                      # 635 例，0 失败 0 错误
+python tools/check_footprint.py --quiet      # 39 文件 / 2 功能，退出码 0
+python app.py --check                        # 退出码 0
+node --check ui/web/pages/translate.js       # JS 语法（本机有 node 时）
+$env:TUDOU_RPGTOOL_SAMPLES='D:\gamess'
+python tests/run_all.py                      # 635 例全过
+```
+
+另外做了一次**真实 HTTP 烟测**（临时脚本，跑完即删）：真起一次服务，按页面的
+期望形状核对 `/api/health`（`convergence.all_merged == true`）、`/api/nav`、
+17 个翻译端点里可安全调用的那些、以及 5 个静态资源。
+结果 19 项全过；其中**反向验证了"无会话时必须是明确报错而不是 500"**：
+`backups` / `restore` / `build` / `skip_all` / `start` 在没有会话时都返回
+`{ok: false, error: ...}`，页面据此用 `hint` 而非 `error` 展示。
+
+### 踩坑记录
+
+1. **烟测脚本自己的断言写错了两次**，而实现是对的：
+   * 无会话时 `/api/translate/entries` **不返回** `pages` 字段（只有
+     `page`/`size`/`total`）—— 断言写成了"必须有 `pages`"；
+   * `/api/translate/skip_all` 无会话时的报错文案是"请先选择游戏目录并扫描文本"，
+     而断言在找"扫描"二字。
+   **教训：断言失败时先确认"是实现错了还是断言错了"** —— 这次是断言错了。
+2. 页面里 `collectConfig` 需要区分"保存设置"与"接口自检"两种语义：
+   保存时**不能**把空的 `api_key` 发上去（后端会保留已存 Key，但显式发空串
+   语义就变成"我要清空"），而自检时必须发（否则后端用旧配置自检，用户会困惑）。
+   用一个 `forTest` 参数区分，并把原因写进注释。
+
+### 遗留
+
+* M3b（`cheats` 的 5 类存档读写改回读）未开始，落地建议见 `docs/STATE.md` §7.2
+* M4 统一界面：跨页视觉审查（`docs/UI_SPEC.md` §7 的 7 条）尚未做
+* MZ / XP 的端到端构建仍只有合成样本；真实样本待 M5
+
+---
+
 ## 2026-09-13 ｜ M3a 后端接线完成：翻译功能 17 个端点接入（含 N-15 与一处分层违规）
 
 ### 改了什么

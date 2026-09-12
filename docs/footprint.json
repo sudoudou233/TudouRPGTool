@@ -681,7 +681,7 @@
       "tested": "tests/features/translate/test_routes.py",
       "footprint": "docs/FEATURES.md#translate",
       "vendored": false,
-      "lines": 584
+      "lines": 588
     },
     "features/translate/session.py": {
       "feature": "translate",

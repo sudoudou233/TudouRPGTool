@@ -91,11 +91,26 @@
 
 | 页面 id | 标题 | 文件 | 所属功能 | 状态 |
 | --- | --- | --- | --- | --- |
-| `translate` | 文本翻译 | `ui/web/pages/translate.js` | `features/translate` | M1 骨架（M3a 接线） |
+| `translate` | 文本翻译 | `ui/web/pages/translate.js` | `features/translate` | **已接线**（M3a）：选目录 → 扫描 → 列表编辑 → 批量翻译 → 生成汉化版 → 备份还原 |
 | `cheats` | 存档修改 | `ui/web/pages/cheats.js` | `features/cheats` | M1 引擎识别已可用（M3b 接线） |
 
 页面模块契约：必须 `export function render(host, ctx)`（可为 async）。
 `host` 是已清空的容器元素；`ctx` 含 `{nav, features}`。
+
+### 4.1 `translate` 页面的五张卡片（M3a 定稿）
+
+| 卡片 | 内容 | 对应端点 |
+| --- | --- | --- |
+| 1 游戏目录 | 路径输入 + 「浏览…」（原生对话框）+ 「打开并识别」；下方胶囊显示引擎 / 数据目录 / 计数 | `pick_folder`、`open`、`state` |
+| 2 扫描与文本列表 | 4 个内容开关 + 「扫描文本」「把待翻译全部标记为跳过」；列表含搜索 / 类别 / 状态筛选、分页、行内改译文、逐条跳过与恢复 | `scan`、`skip_all`、`entries`、`entry` |
+| 3 翻译设置 | 引擎 / Key / 接口地址 / 模型 / 语言 / 并发 / 批大小 + 「保存设置」「接口自检」；「开始翻译」「只重试出错条目」「全部重译」 | `providers`、`config`(GET/POST)、`test`、`start` |
+| 4 生成汉化版 | 写入方式（**默认写副本**）/ 输出目录 / 可选字体 + 「生成汉化版」；生成后显示输出目录与**备份路径**；下方是备份列表（可还原） | `build`、`backups`、`restore`、`open_dir`、`pick_font` |
+| 5 任务进度 | 进度条 + 百分比 + 阶段文案 + 耗时 + **取消按钮**；失败时显示 `job.error` 与 `traceback_tail` | `job`、`cancel` |
+
+**该页面被一个静态契约测试守护**（`tests/integration/test_translate_page.py`，23 例）：
+页面调用的每个端点都必须真实存在、后端每个翻译端点都必须有界面入口（双向）、
+覆盖与还原必须有 `confirmDialog` 且把 `confirm: true` 传给后端、
+默认写入方式必须是 `copy`、必须展示备份路径、密钥框必须是 `password` 且不回显。
 
 ### 外壳（不属任何功能，永不随功能变化）
 

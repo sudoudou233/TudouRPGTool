@@ -1,19 +1,18 @@
 # 当前状态快照（STATE）
 
 > **接手本工程第一份要读的文件。** 读完本文件你就能说清"系统有哪几个功能、各自改哪里"。
-> 每个里程碑结束时更新。最后更新：**M3a 后端接线完成时**。
+> 每个里程碑结束时更新。最后更新：**M3a 完成时**。
 
 ---
 
 ## 1. 一句话状态
 
-**M3a 的后端已全部接线完成**：`features/translate/routes.py` 用 17 个端点把
-**扫描 → 编辑 → 批量翻译 → 生成汉化版 → 备份还原**整条链路接起来，
-长任务全部走 `ctx.jobs`（可取消、有进度），所有写回走安全层，
-覆盖必须显式确认。接线过程又暴露并修掉两个真缺陷：**N-15**
-（MV/MZ 事件对话静默写不进汉化版）与一处**分层违规**
-（`features` 反向 import `ui` → 对话框能力下沉到 `core/sysdialog.py`）。
-**下一步：M3a 前端（`ui/web/pages/translate.js` 接这 17 个端点）→ M4 统一界面 → M3b 修改功能接入。**
+**M3a 已完成**：翻译功能的后端（`features/translate/routes.py`，17 个端点）与
+前端（`ui/web/pages/translate.js`，五张卡片）都接好了，
+**扫描 → 编辑 → 批量翻译 → 生成汉化版 → 备份还原**整条链路在界面走通。
+接线过程暴露并修掉两个真缺陷：**N-15**（MV/MZ 事件对话静默写不进汉化版）
+与一处**分层违规**（`features` 反向 import `ui` → 对话框能力下沉到 `core/sysdialog.py`）。
+**下一步：M3b 修改功能接入（`features/cheats/` 的 5 类存档读写改回读），然后 M4 UI 统一。**
 
 ---
 
@@ -25,7 +24,7 @@
 | M1 骨架与足迹 | ✅ 完成 | 空壳可启动，足迹校验通过 | `python app.py --check` 退出码 0；足迹校验 0 错误 |
 | M2a 可信基线 + P0 修复 | ✅ 完成 | 测试可一键跑且退出码可信；P0 缺陷有回归断言 | 5 个 P0 + 4 个 P1 已修；合成 VX/XP 样本覆盖 B-10 活路径 |
 | **M2b core 收敛** | ✅ **完成** | 三类职责各只有一份实现 | `all_merged == true`；`value_model.py` 与 `_refbridge.py` 已删除 |
-| **M3a 翻译功能接入** | 🔄 **后端完成，前端待做** | 扫描→翻译→生成汉化版→还原 全链路走通 | ✅ 扫描（4 个真实游戏）；✅ 后端全链路（MV 与 VX Ace 合成样本端到端：扫描→标记译文→构建→写回→还原）；⬜ 前端未接这 17 个端点 |
+| **M3a 翻译功能接入** | ✅ **完成** | 扫描→翻译→生成汉化版→还原 全链路走通 | ✅ 扫描（4 个真实游戏）+ ✅ 后端 17 个端点 + ✅ 前端五张卡片 + ✅ 端到端构建/写回/还原（MV 与 VX Ace 各跑一遍）+ ✅ 真实 HTTP 烟测 19 项 |
 | M3b 修改功能接入 | ⬜ 未开始 | 5 类存档读写改回读在界面走通 | — |
 | M4 UI 统一 | ⬜ 未开始 | UI 审查通过，无孤立样式 | — |
 | M5 验收硬化 | ⬜ 未开始 | 需求 §8 的 8 项全过 | — |
@@ -209,7 +208,7 @@ N-15 会一路潜伏到用户投诉。**教训：接线阶段必须验证"写进
 ## 6. 当前测试状态
 
 ```powershell
-python tests/run_all.py                      # 585 例，0 失败 0 错误
+python tests/run_all.py                      # 635 例，0 失败 0 错误
 python tests/run_all.py --quiet              # 退出码 0
 python tools/check_footprint.py --quiet      # 退出码 0（39 文件 / 2 功能）
 python app.py --check                        # 退出码 0
@@ -220,7 +219,7 @@ python app.py --check                        # 退出码 0
 | `unit/` | ~320 | 纯单元，零外部依赖（含 `test_sysdialog.py` 的 23 例） |
 | `compat/` | ~96 | 原两个工具断言的可迁移版本 + **M2a 缺陷回归** + **合成 VX/XP 样本** |
 | `features/` | ~120 | 两个功能模块的自有测试（translate 占 ~116：`test_routes.py` 88 + `test_scan_regressions.py` 22 + `test_manifest.py`） |
-| `integration/` | ~30 | 启动服务后的端到端链路 + 零第三方依赖扫描 + Python 3.8 语法扫描 |
+| `integration/` | ~53 | 启动服务后的端到端链路 + 零第三方依赖扫描 + Python 3.8 语法扫描 + **翻译页面静态契约 23 例** |
 | `local/` | 0（待补） | 真实样本层，靠 `TUDOU_RPGTOOL_SAMPLES` 指定；样本不入库 |
 
 **M3a 新增的测试重点**（都是"以前没有任何测试碰过"的地方）：
@@ -228,6 +227,10 @@ python app.py --check                        # 退出码 0
 * `tests/features/translate/test_routes.py`（88 例）：17 个端点**双向**契约核对、
   后台任务可取消、掩码回显**不覆盖已存 API Key**、隐私断言（出网请求只含文本）、
   构建→写回→还原端到端（MV 与 VX Ace 各一遍）
+* `tests/integration/test_translate_page.py`（23 例）：**页面静态契约** ——
+  页面调用的端点必须真实存在、后端每个翻译端点必须**有界面入口**（双向）、
+  覆盖/还原必须二次确认且传 `confirm:true`、默认写入方式是 `copy`、
+  必须展示备份路径、密钥框是 `password` 且不回显、无硬编码颜色、无 `console.log` 残留
 * `tests/unit/test_sysdialog.py`（23 例）：B-27 的修复本身可被 CI 断言
   （候选路径查找 / 脚本拼装 / 降级契约；真正弹窗的部分不测）
 * `tests/features/translate/test_scan_regressions.py::TestN15MVEventPathShape`（4 例）
@@ -251,20 +254,21 @@ python app.py --check                        # 退出码 0
 
 按需求 §10 的 M3a 判据：**扫描 → 翻译 → 生成汉化版 → 还原 全链路在界面走通**。
 
-### 7.1 后端接线（M3a 已完成 ✅）
+### 7.1 功能接线（M3a 已完成 ✅）
 
-落点：`features/translate/routes.py`（新建，17 个端点）+ `features/translate/manifest.py`（改为薄壳）。
+落点：`features/translate/routes.py`（新建，17 个端点）+ `features/translate/manifest.py`（改为薄壳）
++ `ui/web/pages/translate.js`（五张卡片）。
 
 | # | 任务 | 状态 | 证据 |
 | --- | --- | --- | --- |
 | 1 | 扫描：4 个开关（注释/备注/事件名/动画名）→ 后台任务 + 进度 | ✅ | `TestOpenAndScan`（MV 与 VX Ace 各跑一遍） |
-| 2 | 文本列表：搜索 / 类别 / 状态 / 分页 / 行内编辑 / 批量跳过 | ✅ | `TestEntryPaging`（含"分页不重不漏"断言） |
+| 2 | 文本列表：搜索 / 类别 / 状态 / 分页 / 行内编辑 / 批量跳过 | ✅ | `TestEntryPaging`（含"分页不重不漏"断言）+ 页面静态契约 |
 | 3 | 4 个引擎适配器接线 + 设置持久化 + 接口自检 | ✅ | `TestConfigEndpoints` + `test_providers_ids_match_build_translator` |
 | 4 | 批量翻译：进度 + 可中断 + 断点续传 | ✅ | 走 `ctx.jobs` + `_CancelBridge`；`TestJobEndpoints` |
-| 5 | 生成汉化版：复制到新目录 / 覆盖原游戏（二次确认 + 备份路径） | ✅ | `TestBuildAndRestore`（MV 与 VX Ace 各跑一遍） |
+| 5 | 生成汉化版：复制到新目录 / 覆盖原游戏（二次确认 + 备份路径） | ✅ | `TestBuildAndRestore`（MV 与 VX Ace 各跑一遍）+ 页面断言"必须 confirmDialog 且传 confirm:true" |
 | 6 | 备份列表 + 还原入口 | ✅ | 同上：`list_backups` / `restore_backup` 端到端 |
-| 7 | 字体应用（`font` 参数透传给 `builder.build`） | ✅ 后端 | `apply_font` 已有 M2a 回归；UI 待 M4 |
-| 8 | 隐私断言：请求体不含 file/path/游戏目录 | ✅ | `TestPrivacy::test_translate_batch_receives_only_texts` |
+| 7 | 字体应用（`font` 参数透传给 `builder.build` + 原生选字体） | ✅ | `apply_font` 已有 M2a 回归；`pick_font` 端点 + 页面"浏览字体…" |
+| 8 | 隐私断言：请求体不含 file/path/游戏目录 | ✅ | `TestPrivacy::test_translate_batch_receives_only_texts` + 页面上有隐私说明 |
 
 **M3a 接线期暴露的两个额外缺陷**（都不是"接线写错了"，而是被接线暴露出来的真缺陷）：
 
@@ -273,16 +277,24 @@ python app.py --check                        # 退出码 0
 * **F-09 违规**：`features/translate/routes.py` 曾反向 import `ui.native_pick`
   → 对话框能力下沉到 `core/sysdialog.py`（分层是硬约束，见 `docs/MODULES.md`）
 
-### 7.2 M3a 剩余（前端）与 M3b
+### 7.2 下一步：M3b 修改功能接入
+
+`features/cheats/manifest.py` 仍是骨架（只有 `/status` 与已可用的 `/detect`）。
+M3b 要把它接成与 translate 同样的形态（`routes.py` + `Service` + 页面）：
 
 | # | 任务 | 落点 |
 | --- | --- | --- |
-| 1 | 把 `ui/web/pages/translate.js` 接到这 17 个端点（选目录 → 扫描 → 列表 → 翻译 → 生成汉化版 → 还原） | `ui/web/pages/translate.js` + `docs/UI_SPEC.md`（M4 统一） |
-| 2 | 设置表单（引擎 / Key / 模型 / 语言 / 并发 / 批大小）+ 接口自检按钮 | 同上 |
-| 3 | 破坏性操作二次确认 + **展示备份路径**（硬约束 §4.2） | `ui/web/dom.js` 的 `confirmDialog()` |
-| 4 | M3b：`cheats` 的 5 类存档读写改回读（`/api/cheats/*`） | `features/cheats/` |
+| 1 | 存档列表与选择（多存档目录、自动存档） | `features/cheats/routes.py`（新建）+ `core/engines.py`（已具备） |
+| 2 | 5 类读写改回读：金币 / 道具 / 角色 / 开关 / 变量 | `core/formats/mv_save.py`、`core/formats/rgss_save.py` |
+| 3 | 游戏数据修改（非存档）：`Data/*.json` / `.rvdata2` 的字段编辑 | `core/formats/mv_mz_data.py`、`rgss_data.py` |
+| 4 | **写回原存档必须二次确认 + 先备份 + 展示备份路径**（硬约束 §4.2） | `core/safety/atomic.py` + `backup.py` |
+| 5 | 页面 `ui/web/pages/cheats.js` 接线（M4 统一界面） | 同上 |
 
-### 7.3 必须遵守的既有约束（M2a/M2b 建立）
+**建议照抄 M3a 的形态**：`manifest.py` 只做"构造服务 + 委托路由 + 声明页面"，
+业务写在 `routes.py`；长任务一律走 `ctx.jobs`；页面的静态契约用
+`tests/integration/test_cheats_page.py`（照 `test_translate_page.py` 写）守护。
+
+### 7.3 必须遵守的既有约束（M2a/M2b/M3a 建立）
 
 * **写回一律走 `core/safety/atomic.py`** —— 由 `tests/compat/test_m2a_regressions.py`
   的 AST 扫描强制（禁止写模式 `open`）
@@ -310,10 +322,11 @@ M3a 已覆盖 MV 与 VX Ace（合成样本，进 CI）；**MZ / XP 与真实样�
 | 临时状态 | 消除时机 | 验收判据 |
 | --- | --- | --- |
 | `features/translate/translators.py`、`session.py` 是 vendored 代码（保留了原实现的结构与注释） | M5 视情况整理 | 行为由 `test_routes.py` / `test_scan_regressions.py` 覆盖；整理时必须保持 4 个适配器与去重翻译语义不变 |
-| ~~两个功能页都是**骨架**~~ → `translate` **后端已完成但页面未接** | M4 | 页面接上 17 个端点，全链路在界面走通（§7.2） |
-| `features/cheats/manifest.py` 仍是骨架（只有 `/status` 与 `/detect`） | M3b | 5 类存档读写改回读在界面走通 |
+| `features/cheats/manifest.py` 仍是骨架（只有 `/status` 与 `/detect`） | M3b | 5 类存档读写改回读在界面走通（§7.2） |
+| 页面尚未做跨页视觉统一审查 | M4 | `docs/UI_SPEC.md` §7 的 7 条清单全过 |
 | `ctx.translate_service` 是为测试/调试页暴露的服务实例 | 保留（已文档化） | 生产代码不得依赖它；`register_routes` 的 docstring 已声明 |
 | MZ / XP 的端到端构建只在合成样本上覆盖 | M5 | 用 `TUDOU_RPGTOOL_SAMPLES` 的真实样本各跑一遍 |
+| 前端只在浏览器里可验证（无前端测试框架，因零第三方依赖） | 保留 | 以 `test_translate_page.py` 的**静态契约**替代；新增页面照写一份 |
 
 **M2b 已完成的部分（全部）**：
 
