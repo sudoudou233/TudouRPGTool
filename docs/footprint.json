@@ -253,7 +253,7 @@
       "tested": "tests/compat/test_formats_compat.py",
       "footprint": "docs/MODULES.md#coreformats",
       "vendored": false,
-      "lines": 37
+      "lines": 46
     },
     "core/formats/jsoncodec.py": {
       "feature": "none",

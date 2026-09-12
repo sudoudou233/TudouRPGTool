@@ -5,6 +5,59 @@
 
 ---
 
+## 2026-09-12 ｜ M2b（1/3）：抽出 `core/formats/jsoncodec.py`，MV/MZ 编解码收敛为一份
+
+### 改了什么
+
+| 文件 | 内容 |
+| --- | --- |
+| `core/formats/jsoncodec.py`（新，约 300 行） | MV/MZ 共享编解码层：文本/JSON 两种风格、BOM 容忍、JsonEx 元数据键唯一真源、加密包装的密钥派生与异或流、LZString/zlib 压缩与**按内容**判别 |
+| `core/formats/mv_mz_data.py` | 包装四函数改为**转发** jsoncodec；`_save_data_file` 用 `dumps_pretty` + 原子写 |
+| `core/formats/mv_save.py` | `_load`/`_dump` 改用 `decompress_save`/`compress_save`；`META_KEYS` 变别名；`_clean_ints` 转发 `int_map_from`；`_load_json` 转发 `read_json_file`；`PARAMS` 改从 `core/constants.py` 导入（消除第二处重复）；**按内容**判定 engine |
+| `core/formats/__init__.py` | `CONVERGENCE_STATUS`：`pending` → `"merged"` |
+| `tests/unit/test_jsoncodec.py`（新，35 例） | 编解码全覆盖 + `TestConvergence` 静态断言收敛结果 |
+
+### 为什么
+
+需求 §3.3 第三类重复的验收硬指标："合并后上述三类职责各只有一份实现"。
+收敛前，MV/MZ 两条路径各写了一套 JSON / 压缩 / 编码约定（`utf-8-sig`、
+JsonEx 元数据键、加密包装、LZString/zlib）。
+
+### 怎么验证
+
+```powershell
+python tests/run_all.py                      # 493 例，0 失败 0 错误
+$env:TUDOU_RPGTOOL_SAMPLES='D:\gamess'
+python tests/run_all.py                      # 300 个真实 .rvdata2 零漂移
+python tools/check_footprint.py --quiet      # 38 文件，退出码 0
+python app.py --check                        # 退出码 0
+```
+
+`TestConvergence` 的四条静态断言（防止后来者再写一遍）：
+
+* 两个模块都必须使用 `jsoncodec`
+* `mv_mz_data` 不得再出现 `base64.b64decode` 或 `205 ^`（第二份包装实现）
+* `META_KEYS` 只能有一处定义
+* `zlib` / `lzstring` 调用不得散落在 `mv_mz_data` / `mv_save`
+
+### 设计取舍
+
+* **两种 JSON 风格都保留**：游戏数据要可读（缩进 2，便于用户与后续 AI 排查），
+  存档要紧凑（会被压缩，且与引擎写法一致）。收敛的是"约定"而不是"格式"。
+* **压缩按内容判别而非扩展名**：真实游戏里存在扩展名与内容不一致的情况
+  （改包 / 工具生成 / 汉化版重打包）。`is_zlib_stream` 看首字节 `0x78`。
+  顺带修正 `SaveFileMV.__init__`：engine 现在也按内容判定，与 `_load` 一致。
+* **坏 JSON 抛错而非返回 None**：调用方需要区分"文件不存在"与"文件损坏"。
+
+### 遗留（M2b 剩余 2/3）
+
+* `core/marshal/` 仍是两份实现 → 下一轮按 ADR-004 收敛（接口面与已知陷阱已写入
+  `docs/STATE.md` §7.1）
+* `core/_refbridge.py` 仍是 14 项登记 → 需先把 `test_engines.py::TestReferenceParity`
+  的对照结论固化为内联期望值，再删除桥接层（`docs/STATE.md` §7.2）
+
+---
+
 ## 2026-09-12 ｜ M2a 可信基线与 P0 修复
 
 ### 改了什么

@@ -126,19 +126,22 @@
 
 | 文件 | 职责 | 公开 API | 谁调用 |
 | --- | --- | --- | --- |
-| `mv_mz_data.py` | MV/MZ **游戏数据**（`data/*.json`）提取与写回，含加密 JSON 包装 | `extract()`、`apply_to_files()`、`TEXT_CODES`、`WRAPPER_KEYS`、`_load_data_file()`、`_save_data_file()`、`_MULTI_VALUE_CODES`、`_choice_texts()` | `features/translate/session.py`、`core/safety/backup.py`、`core/formats/rgss_data.py`（复用 `TEXT_CODES`） |
-| `rgss_data.py` | VX Ace/XP **游戏数据**（`Data/*.rvdata2|rxdata`）提取与写回 | `extract()`、`apply_to_files()` | `features/translate/session.py`、`core/safety/backup.py` |
-| `mv_save.py` | MV/MZ **存档**（LZString / zlib 双格式自动判别） | `GameDataMV`、`SaveFileMV`、`META_KEYS` | `features/cheats/manifest.py`（M3b 接线） |
+| `jsoncodec.py` | **MV/MZ 共享编解码层**（M2b 收敛点）：文本/JSON 两种风格、BOM 容忍、JsonEx 元数据键唯一真源、加密包装的密钥派生与异或流、LZString/zlib 压缩与按内容判别 | `read_text()`、`read_json_file()`、`dumps_pretty()`、`dumps_compact()`、`write_text_file()`、`write_bytes_file()`、`META_KEYS`、`is_meta_key()`、`strip_meta_keys()`、`int_map_from()`、`WRAPPER_KEYS`、`is_wrapped()`、`split_wrapper()`、`join_wrapper()`、`derive_wrapper_key()`、`crypt_wrapper_bytes()`、`decrypt_wrapper_payload()`、`encrypt_wrapper_payload()`、`is_zlib_stream()`、`decompress_save()`、`compress_save()`、`save_engine()` | `mv_mz_data.py`、`mv_save.py`、M3a/M3b 接线 |
+| `mv_mz_data.py` | MV/MZ **游戏数据**（`data/*.json`）提取与写回，含加密 JSON 包装 | `extract()`、`apply_to_files()`、`TEXT_CODES`、`WRAPPER_KEYS`、`_MULTI_VALUE_CODES`、`_choice_texts()`、`_load_data_file()`、`_save_data_file()` | `features/translate/session.py`、`core/safety/builder.py`、`core/formats/rgss_data.py`（复用 `TEXT_CODES`） |
+| `rgss_data.py` | VX Ace/XP **游戏数据**（`Data/*.rvdata2|rxdata`）提取与写回 | `extract()`、`apply_to_files()` | `features/translate/session.py`、`core/safety/builder.py` |
+| `mv_save.py` | MV/MZ **存档**（LZString / zlib 双格式按内容判别） | `GameDataMV`、`SaveFileMV`、`META_KEYS` | `features/cheats/manifest.py`（M3b 接线） |
 | `rgss_save.py` | RGSS **存档**（hash / contents 双布局，多流同步） | `GameData`、`SaveFile`、`sync_dirty()`、`find_top_hash()` | 同上 |
-| `lzstring.py` | MV 存档所用的 LZString 编解码 | `compress`、`decompress`、`compress_to_base64`、`decompress_from_base64` | `core/formats/mv_save.py` |
-| `__init__.py` | 收敛状态标记 | `CONVERGENCE_STATUS`（当前 `"pending"`） | — |
+| `lzstring.py` | MV 存档所用的 LZString 编解码 | `compress`、`decompress`、`compress_to_base64`、`decompress_from_base64` | `core/formats/jsoncodec.py` |
+| `__init__.py` | 收敛状态标记 | `CONVERGENCE_STATUS`（**已为 `"merged"`**） | `tools/check_footprint.py` |
 
 **改动影响**：这三个职责（数据提取 / 数据写回 / 存档读写）直接决定"功能是否等价"。
 改 `TEXT_CODES` 会同时改变 MV/MZ 与 RGSS 两条提取路径（它们共用这张表 —— 这是**有意**的，
 防止两处规则漂移）。
 
-**M2b 目标**：抽出 `jsoncodec.py`（JSON + LZString + zlib + 加密包装），
-让游戏数据与存档两条路径共用一份编解码实现。
+**⚠ 收敛后的纪律**：JSON 风格、BOM 处理、JsonEx 元数据键、加密包装、
+压缩判别**都只能在 `jsoncodec.py` 里实现一次**。
+`tests/unit/test_jsoncodec.py::TestConvergence` 会静态断言这一点：
+在 `mv_mz_data.py` 里再出现 `base64.b64decode` / 密钥派生 / `zlib` 调用即红灯。
 
 ### core/safety/（M2a 拆为四个模块，依赖方向单向）
 
