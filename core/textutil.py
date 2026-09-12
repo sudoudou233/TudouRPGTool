@@ -77,7 +77,7 @@ def has_real_text(text):
     接口会把 ``\\V[1]`` 改写成别的形式，破坏游戏变量引用。
 
     本实现先剥离控制码再判断：只有剥离后仍含字母才算有文本。
-    这条修正已被 tests/unit/test_misc.py 的用例锁定。
+    这条修正已被 tests/unit/test_textutil.py 的用例锁定。
     """
     if not text:
         return False

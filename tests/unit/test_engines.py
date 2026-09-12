@@ -274,10 +274,171 @@ class TestConstants(unittest.TestCase):
         self.assertFalse(constants.is_supported("2k3"))
 
 
+#: ---------------------------------------------------------------------------
+#: 冻结的实测基线：7 个真实游戏上"本工程 vs 两个旧实现"的判定与存档数量。
+#:
+#: 这是"合并没改变行为"的**独立证据** —— 不再依赖 core/_refbridge.py
+#: （该桥接层是 M1/M2a 的临时脚手架，M2b 后删除）。
+#:
+#: 采集时间：2026-09-12（M2b）。采集方式：同时调用
+#:   * 本工程 ``core.engines.detect()``
+#:   * 旧修改工具 ``rpgmaker_cheating_tool/engines.py``
+#:   * 旧翻译工具 ``rpgmaker_translation_tool/tool/engines.py``
+#: 三者在全部样本上判定一致（含"未识别"这一例）。
+#:
+#: 若某天本实现的判定发生变化，本表会立刻失败 —— 那时必须明确回答
+#: "是有意改进，还是回归"，并在 docs/DEVLOG.md 记录理由。
+#: ---------------------------------------------------------------------------
+FROZEN_REAL_GAME_BASELINE = (
+    # (游戏目录, 期望引擎, 期望存档数, 备注)
+    (r"D:\gamess\demon\DD_V07c_Windows\DD_V07c_Windows", "mz", 3,
+     "MZ：js/rmmz_core.js + save/*.rmmzsave"),
+    (r"D:\gamess\痴女の触手 官中版\痴女の触手 官中版", "mv", 0,
+     "MV：www/js/rpg_core.js（无存档）"),
+    (r"D:\gamess\踏勇\践踏勇者\整合\整合-1\1.12.3", "vxace", 24,
+     "VX Ace：Data/*.rvdata2 + Save*.rvdata2（含改造版运行时）"),
+    (r"D:\gamess\zhoukai\诅咒铠甲2\PC\PC-1\V5.9", "mv", 2,
+     "MV：第二个样本，验证判据不是只对某一个游戏成立"),
+    (r"D:\gamess\JIANTATA\1-6\PC-1\ToT 1.16.2.2 CN1.0", "vxace", 1,
+     "目录名易被误判为 XP，实为 VX Ace（.rvdata2）"),
+    (r"D:\gamess\boli\B7794\博麗霊夢は洗脳されてしまいました", "vxace", 9,
+     "翻译工具的 e2e 样本"),
+    (r"C:\Windows", None, 0,
+     "'未识别'这一例：三个实现都必须返回 None"),
+)
+
+
+class TestFrozenRealGameBaseline(unittest.TestCase):
+    """冻结基线的回归测试（需要真实样本；缺失则跳过）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        from core import paths
+        if not paths.samples_root():
+            raise unittest.SkipTest(
+                "未找到样本目录，跳过。设置环境变量 %s 后重跑。"
+                % paths.ENV_SAMPLES)
+        missing = [d for d, _e, _n, _note in FROZEN_REAL_GAME_BASELINE
+                   if d.startswith("D:") and not os.path.isdir(d)]
+        if missing:
+            raise unittest.SkipTest("样本路径不存在（换机？）：%s" % missing[:2])
+
+    def test_engine_detection_matches_frozen_baseline(self):
+        for directory, expected, _count, note in FROZEN_REAL_GAME_BASELINE:
+            with self.subTest(game=os.path.basename(directory)[:32]):
+                info = engines.detect(directory)
+                self.assertEqual(
+                    info["engine"], expected,
+                    "引擎判定与冻结基线不一致（%s）：期望 %r，实际 %r"
+                    % (note, expected, info["engine"]))
+
+    def test_save_counts_match_frozen_baseline(self):
+        for directory, expected, count, note in FROZEN_REAL_GAME_BASELINE:
+            with self.subTest(game=os.path.basename(directory)[:32]):
+                info = engines.detect(directory)
+                saves = engines.list_saves(info, directory)
+                self.assertEqual(
+                    len(saves), count,
+                    "存档数量与冻结基线不一致（%s）：期望 %d，实际 %d"
+                    % (note, count, len(saves)))
+
+    def test_baseline_covers_all_supported_engines(self):
+        """基线必须覆盖到需求要求的引擎集合，否则"一致"没有说服力。"""
+        covered = {expected for _d, expected, _c, _n in FROZEN_REAL_GAME_BASELINE}
+        for engine in ("mz", "mv", "vxace"):
+            with self.subTest(engine=engine):
+                self.assertIn(engine, covered)
+        self.assertIn(None, covered, "必须包含'未识别'这一例")
+
+    def test_unrecognized_case_reports_error(self):
+        info = engines.detect("C:\\Windows")
+        self.assertIsNone(info["engine"])
+        self.assertFalse(info["supported"])
+        self.assertTrue(info["error"])
+
+
+#: 冻结的判据覆盖矩阵：两个旧实现各有**不同的** MV/MZ 判据，
+#: 合并后必须两套都认（需求 §3.3 第一类重复的核心要求）。
+#:
+#: 采集时间：2026-09-12（M2b）。做法：对每种"标记文件组合"分别调用
+#: 旧修改工具（判据 ``*_core.js``）与旧翻译工具（判据 ``*_managers.js``），
+#: 确认两者各自的判定，再确认本实现对两者都给出同一答案。
+FROZEN_DETECTION_FIXTURES = (
+    # (标签, 造出来的文件, 期望引擎, 该用例考验的是哪一侧的判据)
+    ("mz_core_only", ["js/rmmz_core.js", "data/System.json"], "mz",
+     "修改工具的判据（rmmz_core.js）"),
+    ("mv_core_only", ["js/rpg_core.js", "data/System.json"], "mv",
+     "修改工具的判据（rpg_core.js）"),
+    ("mz_managers_only", ["js/rmmz_managers.js", "data/System.json"], "mz",
+     "翻译工具的判据（rmmz_managers.js）"),
+    ("mv_managers_only", ["js/rpg_managers.js", "data/System.json"], "mv",
+     "翻译工具的判据（rpg_managers.js）"),
+    ("mz_www_layout", ["www/js/rmmz_core.js", "www/data/System.json"], "mz",
+     "NW.js 打包（资源在 www/ 下）"),
+    ("system_json_bom_fallback", ["data/System.json"], "mv",
+     "无 JS 标记时的 System.json 兜底"),
+    ("vxace", ["Data/Items.rvdata2"], "vxace", "RGSS：.rvdata2"),
+    ("vx", ["Data/Items.rvdata"], "vx",
+     "RGSS：.rvdata —— **旧翻译工具识别不出这一档**（本实现补上）"),
+    ("xp", ["Data/Items.rxdata"], "xp", "RGSS：.rxdata"),
+    ("rvdata2_beats_rvdata", ["Data/A.rvdata", "Data/B.rvdata2"], "vxace",
+     ".rvdata2 是 .rvdata 的超集，必须优先"),
+    ("rm2k3_ini", ["RPG_RT.ini"], "2k3", "2000/2003：只识别不修改"),
+    ("rm2k3_ldb", ["RPG_RT.ldb"], "2k3", "2000/2003：LDB 判据"),
+    ("unknown", [], None, "未识别"),
+)
+
+
+class TestFrozenDetectionFixtures(unittest.TestCase):
+    """判据覆盖矩阵（不依赖参考工具目录，任何机器可跑）。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="fixt_")
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_each_fixture_detects_expected_engine(self):
+        for label, files, expected, purpose in FROZEN_DETECTION_FIXTURES:
+            with self.subTest(case=label, purpose=purpose):
+                sub = os.path.join(self.tmp.name, label)
+                os.makedirs(sub, exist_ok=True)
+                make_game(sub, files)
+                info = engines.detect(sub)
+                self.assertEqual(
+                    info["engine"], expected,
+                    "%s 期望 %r，实际 %r（考验的是：%s）"
+                    % (label, expected, info["engine"], purpose))
+
+    def test_vx_is_supported_unlike_translation_tool(self):
+        """**合并带来的能力提升**：旧翻译工具识别不出 VX，本实现必须支持。"""
+        sub = os.path.join(self.tmp.name, "vx_check")
+        os.makedirs(sub, exist_ok=True)
+        make_game(sub, ["Data/Items.rvdata"])
+        info = engines.detect(sub)
+        self.assertEqual(info["engine"], "vx")
+        self.assertTrue(info["standard"], "VX 必须走标准 Ruby Marshal")
+        self.assertEqual(info["layout"], "contents")
+        self.assertTrue(info["supported"])
+
+    def test_mz_wins_when_both_markers_present(self):
+        """两个标记都在时必须判 MZ（更权威的判据优先，两个旧实现都这样）。"""
+        sub = os.path.join(self.tmp.name, "both")
+        os.makedirs(sub, exist_ok=True)
+        make_game(sub, ["js/rmmz_core.js", "js/rpg_core.js", "data/System.json"])
+        self.assertEqual(engines.detect(sub)["engine"], "mz")
+
+    def test_matrix_covers_both_criteria_families(self):
+        """矩阵必须同时覆盖两套判据，否则合并的意义就没被验证。"""
+        purposes = " ".join(p for _l, _f, _e, p in FROZEN_DETECTION_FIXTURES)
+        self.assertIn("修改工具的判据", purposes)
+        self.assertIn("翻译工具的判据", purposes)
+
+
 class TestReferenceParity(unittest.TestCase):
     """与两个旧实现的判定一致性（需要参考工具目录；缺失则跳过）。
 
-    这是"合并没改变行为"的直接证据：新实现必须与旧实现判定一致。
+    ⚠ M2b 之后本类会被移除（`_refbridge.py` 一并删除）——
+    真实样本上的等价性已由 ``TestFrozenRealGameBaseline`` 独立承担，
+    判据覆盖由 ``TestFrozenDetectionFixtures`` 独立承担。
     """
 
     def setUp(self):

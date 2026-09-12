@@ -5,6 +5,58 @@
 
 ---
 
+## 2026-09-12 ｜ M2b（2/3）：测试去重 + 把"与旧实现等价"的证据冻结为独立夹具
+
+### 改了什么
+
+| 项 | 内容 |
+| --- | --- |
+| 删除 `tests/unit/test_misc.py` | 它把 5 个模块的用例混在一起，而 `test_config.py` 只是**再导出**一次 → 同一批用例执行两遍（unit 层计数虚高到 371） |
+| `tests/unit/test_config.py` | 收纳 `TestConfig` + `TestConstants`（并补了 batch_size 钳制、`redacted` 五种密钥名、`default_config_path`、`DATA_EXTS` 覆盖等用例） |
+| `tests/unit/test_engines.py` | 新增 `TestFrozenRealGameBaseline`（4 例）与 `TestFrozenDetectionFixtures`（4 例） |
+| `core/textutil.py` | 修正 docstring 里指向已删除 `test_misc.py` 的引用 |
+
+### 为什么
+
+两件事，都是 M2b 剩余工作的前置条件：
+
+1. **去重**：`docs/STATE.md` §7.3 登记的"计数翻倍"问题。真实用例数比显示值少 49，
+   会让"测试覆盖是否足够"的判断失去准头。
+2. **冻结证据**（关键）：`core/_refbridge.py` 是为"新实现 vs 旧实现"对照而存在的
+   临时脚手架，M2b 要删掉它。但**直接删会连带删掉唯一的一份等价性证据**
+   （`TestReferenceParity` 依赖 refbridge）。所以先把结论固化成不依赖参考工具的夹具。
+
+### 冻结了什么
+
+| 夹具 | 内容 |
+| --- | --- |
+| `FROZEN_REAL_GAME_BASELINE`（7 条） | 7 个真实游戏的**引擎判定 + 存档数量**，采集时同时比对本工程与**两个**旧实现，三者全部一致（含"未识别"一例） |
+| `FROZEN_DETECTION_FIXTURES`（13 条） | 每种标记文件组合 → 期望引擎。**同时覆盖两套 MV/MZ 判据**（`*_core.js` 属修改工具、`*_managers.js` 属翻译工具）、www 布局、System.json 兜底、RGSS 三档、2000/2003、未识别 |
+
+另加一条"能力提升"断言：旧翻译工具识别不出 VX（`.rvdata`），本实现必须支持 ——
+这是合并带来的实际收益，值得单独钉住。
+
+夹具的注释里写明了**采集时间与采集方式**，并说明"若判定变化，本表会失败，
+那时必须回答是有意改进还是回归"。这样它就不是一份会慢慢腐烂的快照。
+
+### 怎么验证
+
+```powershell
+python tests/run_all.py                      # 444 例，0 失败 0 错误
+$env:TUDOU_RPGTOOL_SAMPLES='D:\gamess'
+python tests/run_all.py                      # 冻结基线 4 例通过（真实样本）+ 300 个 .rvdata2 零漂移
+python tools/check_footprint.py --quiet      # 38 文件，退出码 0
+python app.py --check                        # 退出码 0
+```
+
+### 遗留
+
+* `core/_refbridge.py` 与其 13 例测试仍存在 —— 但**删除路径已写成机械步骤**
+  （6 步，见 `docs/STATE.md` §7.2），下一轮直接执行
+* `core/marshal/` 仍是两份实现（3/3 部分），计划见 §7.1
+
+---
+
 ## 2026-09-12 ｜ M2b（1/3）：抽出 `core/formats/jsoncodec.py`，MV/MZ 编解码收敛为一份
 
 ### 改了什么

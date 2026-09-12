@@ -163,7 +163,7 @@ RPG Maker 全能工具 v2.0.0-dev  (Python 3.10.9)
 ## 6. 当前测试状态
 
 ```powershell
-python tests/run_all.py                      # 458 例，0 失败 0 错误（含真实样本）
+python tests/run_all.py                      # 444 例，0 失败 0 错误（含真实样本）
 python tests/run_all.py --quiet              # 退出码 0
 python tools/check_footprint.py --quiet      # 退出码 0（37 文件 / 2 功能）
 python app.py --check                        # 退出码 0
@@ -231,23 +231,48 @@ python app.py --check                        # 退出码 0
 * `ObjectNode.ivars` 是 **`(Symbol 节点, 值节点)` 的列表**，不是 dict
 * 标准模式下单字节整数上限是 **117**（不是 122，见 N-10）
 
-### 7.2 消除 `core/_refbridge.py`
+### 7.2 消除 `core/_refbridge.py`（证据已冻结，可机械执行）
 
-把 14 项对照用途逐条转为工程内断言：
-* 引擎识别一致性 → 已在 `tests/unit/test_engines.py::TestReferenceParity` 覆盖
-  （与两个旧实现比对）；**但该测试目前依赖 refbridge**，需要改为"内联期望值"形式
-  （把实测结论固化成断言），否则删掉 refbridge 会连带删掉这份证据
-* 其余项（`rmarshal` / `rpgdata` / `mvdata` / `lzstring` / `tool.*`）已全部 vendored 进
-  本工程，对照价值已由 `test_marshal_compat.py` / `test_formats_compat.py` /
-  `test_standard_mode.py` 承接
-* 删除后：`reference_status()` 的 `pending` 归零 →
-  `ui/routes.py` 的 `/api/health` 相应调整 → `tests/unit/test_refbridge.py` 删除 →
-  `tests/unit/test_misc.py::TestRefbridge` 删除
+**前置动作已完成（2026-09-12）**：把桥接层承担的"与旧实现等价"证据
+**固化为不依赖参考工具的夹具**，避免删桥接层时连带删掉证据：
 
-### 7.3 测试去重
+| 冻结内容 | 位置 | 覆盖 |
+| --- | --- | --- |
+| 真实游戏基线 | `tests/unit/test_engines.py::TestFrozenRealGameBaseline` | 7 个真实游戏的引擎判定 + 存档数量（含"未识别"一例），与**两个**旧实现比对过 |
+| 判据覆盖矩阵 | `tests/unit/test_engines.py::TestFrozenDetectionFixtures` | 13 种标记文件组合 —— **两套 MV/MZ 判据都覆盖**（`*_core.js` 与 `*_managers.js`），外加 www 布局、System.json 兜底、RVGSS 三档、2000/2003、未识别 |
+| 能力提升断言 | 同上 `test_vx_is_supported_unlike_translation_tool` | 旧翻译工具识别不出 VX，本实现必须支持 |
 
-`tests/unit/test_misc.py` 里的 `TestConfig`/`TestConstants` 与 `test_config.py`
-重复导出（当前无害，但用例计数翻倍）。
+**剩余步骤**（机械执行即可）：
+
+1. 删除 `tests/unit/test_refbridge.py`（13 例，测的是桥接层自身）
+2. `ui/routes.py`：移除 `from core import _refbridge` 与 `/api/health` 的 `reference` 段
+3. `ui/web/app.js`：移除顶栏"待收敛参考实现"chip
+4. `tests/unit/test_server.py` / `tests/integration/test_startup.py`：
+   健康检查的键列表里去掉 `reference`
+5. `tests/unit/test_engines.py::TestReferenceParity` 两个方法删除
+   （合成对照已被冻结矩阵取代）
+6. 删除 `core/_refbridge.py`；`features/translate/manifest.py` 与
+   `core/safety/__init__.py` 的 `@depends` 行去掉相关引用
+7. `docs/MODULES.md` 的 `core/_refbridge.py` 段整段删除；
+   `docs/ARCHITECTURE.md` §4.4 与 §3 依赖图更新
+
+**注意**：`paths.reference_root()` / `reference_available()` 等路径工具**保留** ——
+它们与桥接层无关，是"参考目录在哪"的配置，删掉会失去可配置性。
+
+### 7.3 测试去重（**已完成**）
+
+原先 `tests/unit/test_misc.py` 把 5 个模块的用例混在一起，而
+`tests/unit/test_config.py` 只是把它们**再导出**一次 —— 同一批用例被执行两遍
+（计数翻倍）。M2b 已处理：
+
+* `test_misc.py` 删除
+* `TestConstants` / `TestConfig`（含新增的 batch_size、redacted、default_config_path）
+  → 统一放进 `tests/unit/test_config.py`
+* `TestPaths*` 部分 → 保留在 `tests/unit/test_paths.py`（覆盖更全）
+* `TestTextutil*` → 保留在 `tests/unit/test_textutil.py`（覆盖更全）
+* `TestRefbridge` → 只留在 `tests/unit/test_refbridge.py`（该文件本身在 §7.2 待删）
+
+效果：unit 层用例数由"含重复的 371"变为**真实的 322**；总数 493 → 444。
 
 ### 7.4 建议引入审查者
 
@@ -264,7 +289,7 @@ python app.py --check                        # 退出码 0
 | `core/_refbridge.py` 桥接层（14 项登记） | M2b 剩余 | 整文件删除；`/api/health` 的 `reference` 段调整；`test_refbridge.py` 删除 |
 | `features/translate/translators.py`、`session.py` 是 vendored 代码 | M3a | 接线为正式模块并接入 UI |
 | 两个功能页都是**骨架**（`status: skeleton`） | M3a / M3b | 两条回归链路在界面走通 |
-| `tests/unit/test_misc.py` 里的 `TestConfig`/`TestConstants` 与 `test_config.py` 重复导出 | M2b 剩余 | 去重（当前无害：每个用例只执行一次） |
+| ~~`tests/unit/test_misc.py` 与 `test_config.py` 重复导出~~ | ✅ M2b 已去重 | `test_misc.py` 已删除，用例各归其位（unit 层"371 含重复" → **322 真实**） |
 
 **M2b 已完成的部分**：
 
