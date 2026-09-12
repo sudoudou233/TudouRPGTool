@@ -162,10 +162,56 @@ class Node:
 # ---------------------------------------------------------------------------
 # to_py() 辅助：符号名 / 实例变量名的统一解码
 # ---------------------------------------------------------------------------
+#: 解析器登记表（``id(parser) -> parser``）。
+#:
+#: 为什么需要：``SymLink`` 只存符号下标，解析名字必须回查符号表，
+#: 而**只有根节点**带 ``._parser``（``load_streams`` 回填），深层
+#: ``SymLink`` 拿不到。原实现因此退化成 ``"symbol#6"``，
+#: 导致 VX Ace 事件文本被静默丢弃（N-14）。
+#:
+#: 做成模块级登记表而不是给每个节点挂 ``_parser``：后者要遍历整棵树，
+#: 对大存档（数万节点）是明显开销，而且 22 个 Node 类都要改 ``__slots__``。
+#:
+#: 有界：超过 :data:`_PARSER_REGISTRY_LIMIT` 就整体清空（极保守的回收策略）。
+#: 清空只影响"已失去根引用但仍存活"的节点，正常解析流程中符号表始终可达。
+_PARSERS = {}
+_PARSER_REGISTRY_LIMIT = 4096
+
+
+def register_parser(parser):
+    """登记一个解析器，供 ``SymLink`` 回查符号表。"""
+    if len(_PARSERS) >= _PARSER_REGISTRY_LIMIT:
+        _PARSERS.clear()
+    _PARSERS[id(parser)] = parser
+    return parser
+
+
 def _sym_name(node):
-    """从 Symbol / SymLink 节点取名字（bytes 按 utf-8 容错解码）。"""
+    """从 Symbol / SymLink 节点取名字（bytes 按 utf-8 容错解码）。
+
+    ⚠ 2026-09-12 M2b 修复 **N-14**：``SymLink``（``;``）是 Ruby Marshal 的
+    **符号表引用**，自身只存下标。原实现拿到 ``SymLink`` 时直接返回
+    ``"symbol#6"`` 这种占位串 —— 于是所有依赖"符号名比较"的判断全部失效：
+
+    * ``obj.class_name == "RPG::EventCommand"`` 永远为假
+    * ``_rmobject_key`` 找不到 ``@code`` / ``@parameters``
+    → **VX Ace 的事件文本被静默丢弃**（本机实测：从 6 千余条掉到 115 条，
+      而且不报错。这正是"静默丢功能"最危险的一类。）
+
+    现在回查 ``node._parser.symbols``，取不到时退回模块级登记表
+    :data:`_PARSERS`。两者都拿不到才保留可辨认的占位串（便于排查，
+    也避免把"解析失败"伪装成"没有这个字段"）。
+    """
     if node is None:
         return None
+    if isinstance(node, SymLink):
+        for parser in (getattr(node, '_parser', None), _PARSERS.get(id(node))):
+            symbols = getattr(parser, 'symbols', None)
+            if symbols and 0 <= node.index < len(symbols):
+                raw = symbols[node.index]
+                return raw.decode('utf-8', 'replace') if isinstance(raw, bytes) \
+                    else str(raw)
+        return "symbol#%d" % node.index
     name = getattr(node, 'name', None)
     if isinstance(name, bytes):
         return name.decode('utf-8', 'replace')
@@ -765,7 +811,11 @@ class Parser:
             return Symbol(name)
         if t == SYMLINK:
             idx = self._fixnum()
-            return SymLink(idx)
+            node = SymLink(idx)
+            # N-14：登记解析器，使 _sym_name 能回查符号表（见 _PARSERS 说明）
+            register_parser(self)
+            node._parser = self
+            return node
         if t == ARRAY:
             n = self._fixnum()
             items = [self._object() for _ in range(n)]

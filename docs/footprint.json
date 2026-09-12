@@ -327,7 +327,7 @@
       "footprint": "docs/MODULES.md#coreformats",
       "vendored": true,
       "note": "vendored：来自 rpgmaker_translation_tool/tool/vxace.py。 已知缺陷 B-02（非原子写）、B-13（original 参数未用于校验）。",
-      "lines": 498
+      "lines": 571
     },
     "core/formats/rgss_save.py": {
       "feature": "cheats",
@@ -398,7 +398,7 @@
       "footprint": "docs/MODULES.md#coremarshal",
       "vendored": true,
       "note": "vendored：来自 rpgmaker_cheating_tool/rmarshal.py（原样搬入）。 已知缺陷 B-10（Parser._fixnum 重复定义，XP/VX 写回漂移） 在 M2a 修复；M2b 收敛后本文件删除。",
-      "lines": 902
+      "lines": 952
     },
     "core/marshal/value_layer.py": {
       "feature": "none",
@@ -418,7 +418,7 @@
       "tested": "tests/unit/test_marshal_value.py",
       "footprint": "docs/MODULES.md#coremarshal",
       "vendored": false,
-      "lines": 844
+      "lines": 890
     },
     "core/paths.py": {
       "feature": "none",

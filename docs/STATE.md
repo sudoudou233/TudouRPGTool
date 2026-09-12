@@ -11,7 +11,9 @@
 引擎识别、MV/MZ 编解码（`jsoncodec.py`）、Ruby Marshal（`doc_model` 二进制层 +
 `value_layer` 门面，旧 `value_model` 已删）。`_refbridge.py` 已删除，
 `/api/health` 的 `convergence.all_merged == true`。
-**下一步：M3a 翻译功能接入。**
+**M3a 已开工**：扫描链路在 4 个真实游戏上跑通，并修掉三个"静默丢功能"缺陷
+（N-12/13/14，VX Ace 提取量 115 → 16,547 条）。
+**下一步：M3a 剩余（翻译 / 生成汉化版 / 还原 / UI 接线）。**
 
 ---
 
@@ -23,7 +25,7 @@
 | M1 骨架与足迹 | ✅ 完成 | 空壳可启动，足迹校验通过 | `python app.py --check` 退出码 0；足迹校验 0 错误 |
 | M2a 可信基线 + P0 修复 | ✅ 完成 | 测试可一键跑且退出码可信；P0 缺陷有回归断言 | 5 个 P0 + 4 个 P1 已修；合成 VX/XP 样本覆盖 B-10 活路径 |
 | **M2b core 收敛** | ✅ **完成** | 三类职责各只有一份实现 | `all_merged == true`；`value_model.py` 与 `_refbridge.py` 已删除；475 例测试全绿 |
-| M3a 翻译功能接入 | ⬜ 未开始 | 扫描→翻译→生成汉化版→还原 全链路走通 | — |
+| **M3a 翻译功能接入** | 🔄 **进行中** | 扫描→翻译→生成汉化版→还原 全链路走通 | ✅ **扫描链路已在 4 个真实游戏上跑通**（含 VX Ace 的三个"静默丢功能"修复）；⬜ 翻译 / 生成汉化版 / 还原 与 UI 接线 |
 | M3b 修改功能接入 | ⬜ 未开始 | 5 类存档读写改回读在界面走通 | — |
 | M4 UI 统一 | ⬜ 未开始 | UI 审查通过，无孤立样式 | — |
 | M5 验收硬化 | ⬜ 未开始 | 需求 §8 的 8 项全过 | — |
@@ -161,10 +163,43 @@ RPG Maker 全能工具 v2.0.0-dev  (Python 3.10.9)
 
 ---
 
+### M3a 接线期**新发现**的问题（**最危险的一类：静默丢功能**）
+
+M2b 的 marshal 收敛完成后，把 `rgss_data.py` 切到 `value_layer`。**VX Ace 的
+提取量从 6 千余条掉到 115 条，而且不报错。** 三个原因叠加，逐个修掉：
+
+| 编号 | 位置 | 问题 | 修法 |
+| --- | --- | --- | --- |
+| **N-12** | `core/formats/rgss_data.py` | `RPG::Map#@events` 是 **Hash**（键为事件 id），而 vendored 代码用 `enumerate` 当列表遍历 → `RMDict.__getitem__(0)` 抛 **`KeyError: 0`**，整张地图的地图事件全丢 | 新增 `_pairs_of()` / `_pairs_of_values()`，把 Array / Hash / 值层代理 / Ivar 包装统一成 `[(key, value)]`；所有遍历点改用它 |
+| **N-13** | 同上 | 字符串在值层是 **`RMStr` 代理**，`isinstance(v, str)` 不成立 → `_text_of` 返回 `None` → 文本被判为"没有内容"；`@parameters` 还是 **Ivar 包装的数组**，`len()` 为 0 → 所有 401/402 对话被丢弃 | `_text_of` 分三层剥（`Ivar` → 带 `.value` 的代理 → 原生类型）；`@parameters` 取值后先 `_unwrap` |
+| **N-14** | `core/marshal/doc_model.py` | **`SymLink`（符号表引用）没被解析** → `class_name` 退化成 `"symbol#6"` → 所有 `class_name == "RPG::EventCommand"` 判断失效、`_rmobject_key` 找不到 `@code`/`@parameters` | `_sym_name` 回查 `node._parser.symbols`；新增有界的模块级解析器登记表 `_PARSERS`（深层 SymLink 拿不到 `_parser`）；`loads` 改走 `load_streams`（只有它回填 `_parser`） |
+
+**为什么这一条最值得记**：三处都**不报错**，只表现为"译文变少了"。
+如果 M3a 只做接线不做量级核对，这个问题会一直潜伏到用户发现。
+
+**已加防护**：`tests/features/translate/test_scan_regressions.py`
+* N-12/13/14 各自的单元断言（含"两遍构造"的符号表夹具）
+* **真实样本量级断言**（`TestRealGameScanVolume`）：四个真实游戏的提取量下界，
+  以及"VX Ace 必须包含对话而不只是界面术语" —— 提取量骤降会被测试抓到
+
+### 真实样本扫描基线（M3a 实测，供后续对照）
+
+| 游戏 | 引擎 | 条目数 | 对话 | 耗时 |
+| --- | --- | --- | --- | --- |
+| `boli\B7794\博麗霊夢は洗脳されてしまいました` | vxace | 16,547 | 15,545 | 1.5s |
+| `JIANTATA\1-6\PC-1\ToT 1.16.2.2 CN1.0` | vxace | 48,103 | 45,731 | 11.8s |
+| `痴女の触手 官中版\痴女の触手 官中版` | mv | 2,332 | 1,155 | 0.8s |
+| `demon\DD_V07c_Windows\DD_V07c_Windows` | mz | 57,177 | 55,767 | 0.8s |
+
+（另：原翻译工具的 `test_pipeline.py` 在同一个 VX Ace 样本上报 6,511 条，
+那是它**只统计了部分文件**的结果；本工程覆盖更全，因此数值更高。）
+
+---
+
 ## 6. 当前测试状态
 
 ```powershell
-python tests/run_all.py                      # 444 例，0 失败 0 错误（含真实样本）
+python tests/run_all.py                      # 492 例，0 失败 0 错误（含真实样本）
 python tests/run_all.py --quiet              # 退出码 0
 python tools/check_footprint.py --quiet      # 退出码 0（37 文件 / 2 功能）
 python app.py --check                        # 退出码 0

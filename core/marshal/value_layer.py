@@ -51,8 +51,44 @@ class MarshalValueError(TypeError):
 # 基础工具
 # ---------------------------------------------------------------------------
 def _sym_name(node):
-    """取符号节点的名字（``Symbol`` / ``SymLink`` 都支持）。"""
-    return D._sym_name(node)
+    """取符号节点的名字（``Symbol`` / ``SymLink`` 都支持）。
+
+    ``SymLink``（``;``）是 Ruby Marshal 的符号表引用 —— 它只存**下标**，
+    真正的名字在解析器的符号表里。若不解析下标，会得到 ``"symbol#6"``
+    这种占位串，于是 ``obj.class_name == "RPG::EventCommand"`` 永远为假，
+    **所有事件文本会被静默丢弃**（M2b 实测：VX Ace 从 6 千余条掉到 115 条）。
+    所以这里必须回查符号表。
+    """
+    if node is None:
+        return None
+    if isinstance(node, D.SymLink):
+        index = node.index
+        parser = _parser_of(node)
+        symbols = getattr(parser, "symbols", None) if parser else None
+        if symbols and 0 <= index < len(symbols):
+            name = symbols[index]
+            return name.decode("utf-8", "replace") if isinstance(name, bytes) \
+                else str(name)
+        # 拿不到符号表：保留可辨认的占位（便于排查），而不是返回 None
+        return "symbol#%d" % index
+    name = getattr(node, "name", None)
+    if isinstance(name, bytes):
+        return name.decode("utf-8", "replace")
+    if name is not None:
+        return str(name)
+    return None
+
+
+def _parser_of(node):
+    """尽力找到节点所属的解析器（用于解析 SymLink 的下标）。
+
+    两个来源：节点自身的 ``_parser``，或同一棵树里任意节点的 ``_parser``
+    （``doc_model.load_streams`` 会回填 ``_parser``）。
+    """
+    parser = getattr(node, "_parser", None)
+    if parser is not None and getattr(parser, "symbols", None):
+        return parser
+    return parser
 
 
 def _sym_node(name):
@@ -827,9 +863,19 @@ def unwrap_to_node(value):
 # loads / dumps
 # ---------------------------------------------------------------------------
 def loads(data, standard=False):
-    """解析单流 Marshal，返回值层对象。"""
-    parser = D.Parser(data, standard=standard)
-    return wrap(parser.parse())
+    """解析单流 Marshal，返回值层对象。
+
+    ⚠ 实现细节：走 ``doc_model.load_streams`` 而不是直接 ``Parser.parse``。
+    原因是 ``SymLink``（符号表引用）只存下标，解析时**必须**能回查
+    ``parser.symbols``；而 ``load_streams`` 会把 ``_parser`` 回填到根节点上，
+    直接 ``Parser.parse`` 则不会。少了这一步，``class_name`` 会退化成
+    ``"symbol#6"`` 这种占位串 —— 依赖 ``class_name == "RPG::EventCommand"``
+    的判断全部失效，事件文本被静默丢弃（M2b 实测）。
+    """
+    streams = D.load_streams(data, standard=standard)
+    if not streams:
+        raise MarshalValueError("解析结果为空：这是缺陷，请检查字节流与 standard 参数")
+    return wrap(streams[0][1])
 
 
 def load_streams(data, standard=False):

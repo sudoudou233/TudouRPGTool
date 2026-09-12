@@ -5,6 +5,83 @@
 
 ---
 
+## 2026-09-12 ｜ M3a 开工：扫描链路跑通，并修掉三个"静默丢功能"缺陷（N-12/13/14）
+
+### 改了什么
+
+| 文件 | 变更 |
+| --- | --- |
+| `core/marshal/doc_model.py` | **N-14**：`_sym_name` 解析 `SymLink`（符号表引用）—— 回查 `node._parser.symbols`，新增有界的模块级解析器登记表 `_PARSERS`；`Parser` 遇到 SYMLINK 时登记解析器；新增节点访问辅助 `ivar()` / `ivar_names()` |
+| `core/marshal/value_layer.py` | `loads` 改走 `doc_model.load_streams`（**只有它回填 `_parser`**，SymLink 才有符号表可查）；`_sym_name` 同样解析 SymLink |
+| `core/formats/rgss_data.py` | **N-12**：新增 `_pairs_of()` / `_pairs_of_values()`，把 Array / Hash / 值层代理 / Ivar 包装统一成 `[(key, value)]`，所有遍历点改用它；**N-13**：`_text_of` 分三层剥代理，`@parameters` 取值后先 `_unwrap` |
+| `tests/features/translate/test_scan_regressions.py`（新，41 例） | N-12/13/14 的单元断言 + **真实样本量级断言** |
+
+### 为什么（这是本轮最值得记的一件事）
+
+M2b 把 `rgss_data.py` 从 `value_model` 切到 `value_layer` 之后，
+**VX Ace 的提取量从 6 千余条掉到 115 条，而且不报错。**
+三个原因叠加，每一个都单独足以造成"静默丢功能"：
+
+| 编号 | 根因 | 表现 |
+| --- | --- | --- |
+| **N-12** | `RPG::Map#@events` 是 **Hash**，vendored 代码用 `enumerate` 当列表遍历 | `RMDict.__getitem__(0)` 抛 `KeyError: 0`，整张地图的地图事件全丢 |
+| **N-13** | 字符串在值层是 `RMStr` **代理**，`isinstance(v, str)` 不成立；`@parameters` 还是 Ivar 包装的数组，`len()` 为 0 | `_text_of` 返回 `None` → 所有 401/402 对话被判为"没有内容" |
+| **N-14** | **`SymLink`（符号表引用）没被解析** | `class_name` 退化成 `"symbol#6"` → `class_name == "RPG::EventCommand"` 永远为假 |
+
+修复效果（真实样本实测）：
+
+```
+VX Ace  boli\B7794     115 → 16,547 条（对话 15,545）
+VX Ace  JIANTATA\ToT    350 → 48,103 条（对话 45,731）
+```
+
+**为什么必须记下来**：三处都不报错，只表现为"译文变少了"。
+如果 M3a 只做接线、不做量级核对，这个问题会一直潜伏到用户发现。
+所以新增的测试里除了单元断言，还有一条 `TestRealGameScanVolume`：
+**四个真实游戏的提取量下界 + "VX Ace 必须包含对话而不只是界面术语"**
+—— 让"数量级崩塌"变成测试能抓到的事。
+
+### 怎么验证
+
+```powershell
+python tests/run_all.py                      # 492 例，0 失败 0 错误
+$env:TUDOU_RPGTOOL_SAMPLES='D:\gamess'
+python tests/run_all.py                      # 含扫描量级断言 + 300 个 .rvdata2 零漂移
+python tools/check_footprint.py --quiet      # 37 文件，退出码 0
+python app.py --check                        # 退出码 0
+```
+
+真实样本扫描基线（已写入 `docs/STATE.md` §5 供后续对照）：
+
+| 游戏 | 引擎 | 条目 | 对话 | 耗时 |
+| --- | --- | --- | --- | --- |
+| `boli\B7794` | vxace | 16,547 | 15,545 | 1.5s |
+| `JIANTATA\ToT 1.16.2.2` | vxace | 48,103 | 45,731 | 11.8s |
+| `痴女の触手 官中版` | mv | 2,332 | 1,155 | 0.8s |
+| `DD_V07c_Windows` | mz | 57,177 | 55,767 | 0.8s |
+
+### 夹具踩坑（写测试时的三次返工，值得记）
+
+`tests/features/translate/test_scan_regressions.py` 需要构造带 **SymLink** 的
+节点树，为此返工三次：
+
+1. `doc_model` 的序列化器**不做符号去重**（每个 Symbol 节点都写全名），
+   所以"数一遍主夹具"得到的下标不可靠 → 改为用一张只含所需符号的小表探下标
+2. 探符号表必须用 `doc_model.load_streams`（回填 `_parser`），
+   `doc_model.loads` 不会 → 拿不到符号表
+3. `D.Symbol(b"X")` 两个相等的对象**不会**被序列化成 `SymLink`，
+   必须显式构造 `D.SymLink(index)`
+
+这三条都写进了测试注释，避免下一个人重复踩。
+
+### 遗留
+
+* M3a 剩余：翻译（4 个引擎适配器接线 + 批量任务）、生成汉化版、还原、UI 页面接线
+* 计划见 `docs/STATE.md` §7；M2a/M2b 建立的约束（原子写、`confirm_overwrite`、
+  长任务可中断）在接线时必须遵守
+
+---
+
 ## 2026-09-12 ｜ M2b（3/3 之三）：marshal 收敛完成 —— 旧值模型删除，需求 §3.3 三类重复全部归零
 
 ### 改了什么

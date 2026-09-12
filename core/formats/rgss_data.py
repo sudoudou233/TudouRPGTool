@@ -32,14 +32,32 @@ def _iv(obj, name):
 
 
 def _text_of(v):
-    """Unwrap RMIvar so wrapped strings compare as plain strings."""
-    if _is_ivar_proxy(v):
-        v = v.value
-    return v if isinstance(v, str) else None
+    """把"可能是 RMIvar / 字符串代理 / 原生 str"的值归一化成 ``str``（否则 None）。
+
+    ⚠ 2026-09-12 M2b 发现并修复 **N-13**：切到 ``value_layer`` 之后，字符串
+    不再以 Python ``str`` 出现，而是 **``RMStr`` 代理**（``Ivar`` 包装里的
+    还会先经过 ``RMIvar``）。原实现只 ``isinstance(v, str)``，于是
+    **VX Ace 全平台提取结果为 0 条**（静默丢功能，不报错）——
+    本机两个 VX Ace 真实样本上 100% 复现。
+
+    现在按"代理 → 原生"的层次逐个剥开：先剥 ``Ivar``，再剥带 ``.value``
+    的字符串代理，最后才判断类型。
+    """
+    v = _unwrap(v)
+    if v is None:
+        return None
+    if isinstance(v, str):
+        return v
+    value = getattr(v, "value", None)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return None
 
 
 def _walk_event_list(entries, fname, ev_list, path_prefix, note_prefix, include_comments):
-    for i, cmd in enumerate(ev_list or []):
+    for i, cmd in enumerate(_pairs_of_values(ev_list)):
         if not _is_object_proxy(cmd) or cmd.class_name != "RPG::EventCommand":
             continue
         code = _iv(cmd, "@code")
@@ -49,10 +67,21 @@ def _walk_event_list(entries, fname, ev_list, path_prefix, note_prefix, include_
         idx, category = rule
         if category == "注释" and not include_comments:
             continue
-        params = _iv(cmd, "@parameters") or []
-        if idx >= len(params):
+        # ⚠ N-13 的第二处：VX Ace 的 @parameters 是 **Ivar 包装的数组**
+        # （"parameters" 方法名本身被当作 ivar 名用），必须剥掉包装才能按下标取。
+        # 不剥的话 len() 为 0 → 所有 401/402 对话被静默丢弃（本机实测：
+        # VX Ace 从 6511 条掉到 115 条）。
+        params = _unwrap(_iv(cmd, "@parameters")) or []
+        if type(params).__name__ == "RMArray":
+            if idx >= len(params):
+                continue
+            text = _text_of(params[idx])
+        elif isinstance(params, (list, tuple)):
+            if idx >= len(params):
+                continue
+            text = _text_of(params[idx])
+        else:
             continue
-        text = _text_of(params[idx])
         if text is not None and has_real_text(text):
             entries.append({
                 "file": fname,
@@ -80,7 +109,7 @@ def _add(entries, fname, path, category, original, note=""):
 
 
 def _extract_array_fields(entries, fname, data, rules, include_notes):
-    for i, obj in enumerate(data or []):
+    for i, obj in _pairs_of(data):
         if not _is_object_proxy(obj):
             continue
         for field, category, label in rules:
@@ -96,7 +125,8 @@ def _extract_array_fields(entries, fname, data, rules, include_notes):
 def _extract_system(entries, fname, obj):
     def arr_field(name, category, label):
         arr = _iv(obj, name)
-        for i, v in enumerate(arr or []):
+        # N-12：这些字段通常是 Array，但统一用 _pairs_of 兼容 Hash 形态
+        for i, v in _pairs_of(arr):
             v = _text_of(v)
             if v is not None:
                 _add(entries, fname, "%s/%d" % (name, i), category, v, "%s %d" % (label, i + 1))
@@ -112,7 +142,7 @@ def _extract_system(entries, fname, obj):
     if _is_object_proxy(terms):
         for group in ("@basic", "@params", "@commands"):
             arr = _iv(terms, group)
-            for i, v in enumerate(arr or []):
+            for i, v in _pairs_of(arr):
                 v = _text_of(v)
                 if v is not None:
                     _add(entries, fname, "@terms/%s/%d" % (group, i), "界面术语", v,
@@ -123,6 +153,48 @@ def _extract_system(entries, fname, obj):
                 v = _text_of(v)
                 if v is not None:
                     _add(entries, fname, "@terms/@messages/%s" % k, "界面术语", v, "界面消息")
+
+
+def _pairs_of(container):
+    """把"像列表的 Ruby 容器"归一化成 ``[(key, value), ...]``。
+
+    ⚠ 2026-09-12 M2b 发现并修复 **N-12**：RPG 数据里同一个字段可能是
+    **Array** 也可能是 **Hash**，而 vendored 代码一律当成列表处理：
+
+    * ``RPG::Map#@events`` → Hash（键是事件 id）→ 原代码用 ``enumerate()``
+      遍历，而 :meth:`RMDict.__getitem__` 的键是 Fixnum，
+      于是 ``enumerate`` 请求下标 0 时抛 ``KeyError: 0``
+      （本机 VX Ace 样本上 100% 复现）
+    * ``Troops#@pages``、``CommonEvents`` 等 → Array
+
+    本函数统一两种容器：Array 用整数下标当 key，Hash 用真实键当 key。
+    调用方拿到的 key 可以直接拼进翻译条目的 ``path``。
+    """
+    container = _unwrap(container)
+    if isinstance(container, dict):
+        return list(container.items())
+    if isinstance(container, (list, tuple)):
+        return list(enumerate(container))
+    if type(container).__name__ == "RMArray":
+        return list(enumerate(container))
+    if type(container).__name__ == "RMDict":
+        return list(container.items())
+    return []
+
+
+def _values_of(container):
+    """同 :func:`_pairs_of`，只要值（放弃键）。"""
+    return [value for _key, value in _pairs_of(container)]
+
+
+def _pairs_of_values(container):
+    """归一化成"可安全迭代的值序列"。
+
+    与 :func:`_values_of` 的区别：本函数**先剥 Ivar 包装**。
+    VX Ace 的 ``@list`` / ``@pages`` / ``@parameters`` 常常是
+    ``Ivar(Array(...))`` 形状，不剥的话迭代会得到空序列。
+    """
+    return _values_of(_unwrap(container))
 
 
 def extract(data_dir, opts):
@@ -173,36 +245,37 @@ def extract(data_dir, opts):
                                    ("@message4", "战斗信息", "状态信息")), opts.include_notes)
         elif base == "Troops":
             _extract_array_fields(entries, fname, data, (("@name", "名称", "队伍"),), opts.include_notes)
-            for i, troop in enumerate(data or []):
+            for i, troop in _pairs_of(data):
                 if not _is_object_proxy(troop):
                     continue
-                for pg_i, page in enumerate(_iv(troop, "@pages") or []):
+                for pg_i, page in _pairs_of(_iv(troop, "@pages")):
                     if _is_object_proxy(page):
                         _walk_event_list(entries, fname, _iv(page, "@list"),
                                          "%d/@pages/%d/@list" % (i, pg_i),
                                          "队伍 %d 页面 %d" % (i + 1, pg_i + 1), opts.include_comments)
         elif base == "CommonEvents":
-            for i, obj in enumerate(data or []):
+            for i, obj in _pairs_of(data):
                 if not _is_object_proxy(obj):
                     continue
                 _add(entries, fname, "%d/@name" % i, "名称", _iv(obj, "@name"), "公共事件 %d" % (i + 1))
                 _walk_event_list(entries, fname, _iv(obj, "@list"), "%d/@list" % i,
                                  "公共事件 %d" % (i + 1), opts.include_comments)
         elif base == "MapInfos":
-            for k, obj in (data or {}).items():
+            for k, obj in _pairs_of(data):
                 if _is_object_proxy(obj):
                     _add(entries, fname, "%s/@name" % k, "地图名", _iv(obj, "@name"), "地图 %s" % k)
         elif base.startswith("Map") and base[3:].isdigit():
             map_id = base[3:]
             _add(entries, fname, "@display_name", "地图名", _iv(data, "@display_name"), "地图 %s" % map_id)
-            for ev_i, ev in enumerate(_iv(data, "@events") or []):
+            # N-12：@events 是 Hash（键为事件 id），必须按 pairs 遍历而不是当列表
+            for ev_i, ev in _pairs_of(_iv(data, "@events")):
                 if not _is_object_proxy(ev):
                     continue
                 ev_name = _text_of(_iv(ev, "@name"))
                 if opts.include_event_names and ev_name is not None:
                     _add(entries, fname, "@events/%d/@name" % ev_i, "事件名", ev_name,
                          "地图 %s 事件 %d" % (map_id, ev_i + 1))
-                for pg_i, page in enumerate(_iv(ev, "@pages") or []):
+                for pg_i, page in _pairs_of(_iv(ev, "@pages")):
                     if _is_object_proxy(page):
                         _walk_event_list(entries, fname, _iv(page, "@list"),
                                          "@events/%d/@pages/%d/@list" % (ev_i, pg_i),
