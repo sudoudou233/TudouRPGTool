@@ -7,10 +7,11 @@
 
 ## 1. 一句话状态
 
-**M2b 进行中（2/3 完成）**：MV/MZ 的 **formats 层已收敛为一份**（`jsoncodec.py`），
-**`_refbridge.py` 已删除**（其"与旧实现等价"的证据已冻结为不依赖参考工具的夹具），
-测试已去重。**剩余**：marshal 收敛为一份（ADR-004）。
-**下一步：marshal 收敛。**
+**M2b core 收敛已完成**：需求 §3.3 的三类重复实现**各只剩一份** ——
+引擎识别、MV/MZ 编解码（`jsoncodec.py`）、Ruby Marshal（`doc_model` 二进制层 +
+`value_layer` 门面，旧 `value_model` 已删）。`_refbridge.py` 已删除，
+`/api/health` 的 `convergence.all_merged == true`。
+**下一步：M3a 翻译功能接入。**
 
 ---
 
@@ -20,8 +21,8 @@
 | --- | --- | --- | --- |
 | M0 现状测绘 | ✅ 完成 | 每条功能都有"原位置 → 新位置"映射 | `docs/M0-现状测绘.md`、`docs/迁移对照表.md`（99 条映射） |
 | M1 骨架与足迹 | ✅ 完成 | 空壳可启动，足迹校验通过 | `python app.py --check` 退出码 0；足迹校验 0 错误 |
-| M2a 可信基线 + P0 修复 | ✅ 完成 | 测试可一键跑且退出码可信；P0 缺陷有回归断言 | 458 例 0 失败；5 个 P0 + 4 个 P1 已修；合成 VX/XP 样本覆盖 B-10 活路径 |
-| **M2b core 收敛** | 🔄 **进行中（2/3）** | 三类职责各只有一份实现 | ✅ **formats 已收敛**（`CONVERGENCE_STATUS == "merged"`）<br>✅ **`_refbridge` 已删除**（证据冻结为夹具）<br>⬜ marshal 未收敛 |
+| M2a 可信基线 + P0 修复 | ✅ 完成 | 测试可一键跑且退出码可信；P0 缺陷有回归断言 | 5 个 P0 + 4 个 P1 已修；合成 VX/XP 样本覆盖 B-10 活路径 |
+| **M2b core 收敛** | ✅ **完成** | 三类职责各只有一份实现 | `all_merged == true`；`value_model.py` 与 `_refbridge.py` 已删除；475 例测试全绿 |
 | M3a 翻译功能接入 | ⬜ 未开始 | 扫描→翻译→生成汉化版→还原 全链路走通 | — |
 | M3b 修改功能接入 | ⬜ 未开始 | 5 类存档读写改回读在界面走通 | — |
 | M4 UI 统一 | ⬜ 未开始 | UI 审查通过，无孤立样式 | — |
@@ -192,106 +193,54 @@ python app.py --check                        # 退出码 0
 
 ---
 
-## 7. 下一步（M2b 剩余 2/3）任务清单
+## 7. 下一步（M3a 翻译功能接入）任务清单
 
-### 7.1 marshal 收敛为一份（**第 1 步已完成，剩 4 步**）
+M2b 已把 core 收敛完毕，M3a 不再有先收敛再接线的顾虑。按需求 §10 的 M3a 判据：
+**扫描 → 翻译 → 生成汉化版 → 还原 全链路在界面走通**。
 
-按 **ADR-004**：以 `doc_model` 为二进制层主体，`value_model` 降为对象门面。
+### 7.1 功能接线（后端）
 
-**✅ 第 1 步已完成（2026-09-12）：`core/marshal/value_layer.py` 落地**
-
-关键设计：值层对象**直接持有并改写 Node**（不是"值↔节点来回转换"），
-因此字节保真天然成立、且只有一份解析器。
-
-| 调用方 | 用到的值层接口（都已实现） |
-| --- | --- |
-| `core/formats/rgss_data.py` | `RMObject`（`.class_name`、`.ivars[...]`（`str` 键，**带不带 `@` 都能读**））、`RMIvar`（`.value`）、`RMStr`（`.value` / `.enc`）、`loads` / `dumps` |
-| `core/safety/builder.py` | `RMStr(text, enc=...)`、`RMIvar(value, {...})`、`RMSymbol(name)`、`dumps` —— ⚠ **注意**：`value_layer` 的 `RMStr`/`RMSymbol` 是**代理**（不给 `enc=` 关键字），`builder` 的字体注入需要改成"构造节点 + 指定编码"，或用 `unwrap_to_node` |
-
-**剩余 4 步**：
-
-1. `core/formats/rgss_data.py`：`from ..marshal import value_model as marshal`
-   → 改用 `value_layer`（先跑通 `tests/compat/` 与 `test_standard_mode.py`）
-2. `core/safety/builder.py`：字体脚本注入改用 `value_layer` 构造节点
-   （`RMStr` 的编码指定方式见上表注意事项）
-3. 删除 `core/marshal/value_model.py`；`core/marshal/__init__.py` 的
-   `CONVERGENCE_STATUS` 置 `"merged"`
-4. 加静态断言（放在 `tests/compat/test_marshal_compat.py` 或新文件）：
-   * `core/marshal/` 下不得再有第二份实现（`value_model` 必须不存在）
-   * `rgss_data` / `builder` 不得再 import `value_model`
-
-**验收硬指标（需求 §3.3）**：
-* `tests/compat/test_marshal_compat.py` 的 **300 个真实 `.rvdata2` 零漂移**
-* `tests/compat/test_standard_mode.py` 的合成 VX/XP 样本往返
-* `tests/unit/test_marshal_value.py` 的 36 例（值层语义与字节保真）
-* `core/marshal/` 下只剩**一份**二进制实现
-
-**⚠ 已实测踩到的陷阱（别再踩）**：
-* 文档模型的 `Float(value, tail)` 的 `value` 是**8 字节大端 IEEE754 原始字节**
-* `ObjectNode.ivars` 是 **`(Symbol 节点, 值节点)` 的列表**，不是 dict
-* `Bignum(sign, digits)` 的 `sign` 是 `b'+'`/`b'-'`，`digits` 是 16 位数字组
-* 标准模式下单字节整数上限是 **117**（不是 122，见 N-10）
-* 代理之间比较（断言里）要用 `value_layer.to_plain()` 递归展开 ——
-  直接 `dict(items) == other` 会因为值是代理而恒不相等
-
-### 7.2 消除 `core/_refbridge.py`（✅ **已完成**）
-
-**证据冻结**（2026-09-12）：把桥接层承担的"与旧实现等价"证据固化为
-**不依赖参考工具**的夹具，避免删桥接层时连带删掉证据：
-
-| 冻结内容 | 位置 | 覆盖 |
+| # | 任务 | 落点 |
 | --- | --- | --- |
-| 真实游戏基线 | `tests/unit/test_engines.py::TestFrozenRealGameBaseline` | 7 个真实游戏的引擎判定 + 存档数量（含"未识别"一例），与**两个**旧实现比对过 |
-| 判据覆盖矩阵 | `tests/unit/test_engines.py::TestFrozenDetectionFixtures` | 13 种标记文件组合 —— **两套 MV/MZ 判据都覆盖**（`*_core.js` 与 `*_managers.js`），外加 www 布局、System.json 兜底、RGSS 三档、2000/2003、未识别 |
-| 能力提升断言 | 同上 `test_vx_is_supported_unlike_translation_tool` | 旧翻译工具识别不出 VX，本实现必须支持 |
+| 1 | 扫描：4 个开关（注释/备注/事件名/动画名）→ 后台任务 + 进度 | eatures/translate/routes.py（新建）+ eatures/translate/session.py |
+| 2 | 文本列表：搜索 / 类别筛选 / 状态筛选 / 分页 / 行内编辑 / 跳过 | 同上 + ui/web/pages/translate.js |
+| 3 | 4 个引擎适配器接线 + 设置持久化 + 接口自检 | eatures/translate/translators.py + core/config.py |
+| 4 | 批量翻译：进度 + ETA + 可中断 + 重试出错内容 + 断点续传 | eatures/translate/（任务内用 job.set_progress / job.token） |
+| 5 | 生成汉化版：复制到新目录 / 覆盖原游戏（**必须二次确认 + 展示备份路径**） | core/safety/builder.py 的 uild(..., confirm_overwrite=True) |
+| 6 | 备份列表 + 还原入口（UI 可点） | core/safety/backup.py 的 list_backups / 
+estore_backup |
+| 7 | 字体应用两条路径 + 失败回退提示 | core/safety/builder.py 的 pply_font |
+| 8 | 隐私断言：请求体不含 file/path/游戏目录 | 新增测试 |
 
-**删除动作（已完成）**：
+### 7.2 必须遵守的既有约束（M2a/M2b 建立）
 
-* ✅ 删除 `tests/unit/test_refbridge.py`（13 例）与 `core/_refbridge.py`
-* ✅ `ui/routes.py`：移除 refbridge 引用；`/api/health` 的 `reference` 段
-  **替换为 `convergence` 段** —— 直接报告需求 §3.3 三类职责的收敛状态
-  （`engines` / `formats` / `marshal` + `all_merged`），让"收敛是否完成"
-  成为**可观测事实**而不是只写在文档里
-* ✅ `ui/web/app.js`：顶栏 chip 由"待收敛参考实现 N"改为"**收敛 x/3**"
-* ✅ `tests/integration/test_startup.py`：健康检查键列表与新增
-  `test_health_reports_convergence_progress`
-* ✅ 删除 `TestReferenceParity`（其真实样本等价性已由冻结基线承担）
-* ✅ `features/translate/manifest.py` / `core/safety/__init__.py` 的 `@depends` 更新
+* **写回一律走 core/safety/atomic.py** —— 由 	est_m2a_regressions.py 的
+  AST 扫描强制（禁止写模式 open）
+* **覆盖必须 confirm_overwrite=True** —— 否则抛 OverwriteNotConfirmed
+* **破坏性操作二次确认** —— ui/web/dom.js 的 confirmDialog()
+* **默认只写副本** —— mode=copy 是默认，不传则界面默认选中它
+* **长任务必须可中断** —— 用 ctx.jobs.submit(fn)，任务内查
+  job.token.is_cancelled()；不给界面留点了停不下来的按钮
+* **进度回调签名** progress_cb(done, total, message=None)
 
-**保留项**：`paths.reference_root()` / `reference_available()` 等路径工具**保留** ——
-它们与桥接层无关，是"参考目录在哪"的配置，删掉会失去可配置性。
+### 7.3 端到端回归（§8-2 的判据）
 
-### 7.3 测试去重（**已完成**）
+MV / MZ / VX Ace / XP **各至少 1 个样本**走完：
 
-原先 `tests/unit/test_misc.py` 把 5 个模块的用例混在一起，而
-`tests/unit/test_config.py` 只是把它们**再导出**一次 —— 同一批用例被执行两遍
-（计数翻倍）。M2b 已处理：
+`
+扫描 → 翻译（用离线假翻译器跑通，不依赖真引擎）→ 生成汉化版 → 写回原游戏 → 还原
+`
 
-* `test_misc.py` 删除
-* `TestConstants` / `TestConfig`（含新增的 batch_size、redacted、default_config_path）
-  → 统一放进 `tests/unit/test_config.py`
-* `TestPaths*` 部分 → 保留在 `tests/unit/test_paths.py`（覆盖更全）
-* `TestTextutil*` → 保留在 `tests/unit/test_textutil.py`（覆盖更全）
-* `TestRefbridge` → 只留在 `tests/unit/test_refbridge.py`（该文件本身在 §7.2 待删）
+用 TUDOU_RPGTOOL_SAMPLES 指向真实样本；**样本不入库**（ADR-005）。
 
-效果：unit 层用例数由"含重复的 371"变为**真实的 322**；总数 493 → 444。
-
-### 7.4 建议引入审查者
-
-需求 §2：M2b 是最值得互审的节点（"重复实现是否真清零 + 字节无损"）。
-审查记录写入 `docs/reviews/REVIEW-YYYYMMDD-<主题>.md`。
-
----
-
-## 8. 当前已知的临时状态（M2b/M3 会消掉，别当成设计）
+## 8. 当前已知的临时状态（M3 会消掉，别当成设计）
 
 | 临时状态 | 消除时机 | 验收判据 |
 | --- | --- | --- |
-| `core/marshal/` 有**两份实现**（`doc_model` + `value_model`） | M2b 剩余 | 两侧 roundtrip 断言同时通过；`core/marshal/` 下只剩一份二进制实现 |
-| `features/translate/translators.py`、`session.py` 是 vendored 代码 | M3a | 接线为正式模块并接入 UI |
+| `features/translate/translators.py`、`session.py` 是 vendored 代码，尚未按 `manifest.py` 契约组织 | M3a | 接线为正式模块并接入 UI |
 | 两个功能页都是**骨架**（`status: skeleton`） | M3a / M3b | 两条回归链路在界面走通 |
 
-**M2b 已完成的部分**：
+**M2b 已完成的部分（全部）**：
 
 * ✅ **formats 收敛**：新增 `core/formats/jsoncodec.py`，MV/MZ 两条路径共用一份
   JSON / 压缩 / 加密包装实现；`core/formats/__init__.py` 的

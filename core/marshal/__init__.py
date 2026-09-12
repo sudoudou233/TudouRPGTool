@@ -3,7 +3,7 @@
 
 @feature  none
 @layer    core
-@public   doc_model, value_model
+@public   doc_model, value_layer
 @depends  (stdlib only)
 @tested   tests/compat/test_marshal_compat.py
 @footprint docs/MODULES.md#coremarshal
@@ -33,11 +33,11 @@ XP/VX 回写字节漂移；值模型的 bignum 写回崩溃），而 M1 的完�
 from __future__ import annotations
 
 #: 收敛状态：'pending'（仍有两份实现） / 'merged'（已收敛为一份）
-CONVERGENCE_STATUS = "pending"
+CONVERGENCE_STATUS = "merged"
 
 # 显式重导出，使 `from core.marshal import doc_model` 与
 # `core.marshal.doc_model` 两种写法都成立（check_footprint 的 F-05 会核对
 # @public 里声明的名字在本模块中真实存在，因此这里必须真的 import）。
-from . import doc_model, value_model  # noqa: E402,F401
+from . import doc_model, value_layer  # noqa: E402,F401
 
-__all__ = ["doc_model", "value_model", "CONVERGENCE_STATUS"]
+__all__ = ["doc_model", "value_layer", "CONVERGENCE_STATUS"]

@@ -5,7 +5,7 @@ Extraction and patching for RPG Maker VX Ace / XP rxdata files.
 @feature  translate
 @layer    core
 @public   extract, apply_to_files
-@depends  core.textutil, core.marshal.value_model, core.formats.mv_mz_data
+@depends  core.textutil, core.marshal.value_layer, core.formats.mv_mz_data
 @tested   tests/compat/test_formats_compat.py
 @footprint docs/MODULES.md#coreformats
 @note     vendored：来自 rpgmaker_translation_tool/tool/vxace.py。
@@ -16,14 +16,15 @@ from __future__ import annotations
 
 import os
 
-from ..marshal import value_model as marshal
+from ..marshal import doc_model as _doc_model
+from ..marshal import value_layer as marshal
 from ..safety.atomic import atomic_write_bytes
 from ..textutil import has_real_text
 from .mv_mz_data import TEXT_CODES
 
 
 def _iv(obj, name):
-    if isinstance(obj, marshal.RMObject):
+    if _is_object_proxy(obj):
         return obj.ivars.get(name)
     if isinstance(obj, dict):
         return obj.get(name)
@@ -32,14 +33,14 @@ def _iv(obj, name):
 
 def _text_of(v):
     """Unwrap RMIvar so wrapped strings compare as plain strings."""
-    if isinstance(v, marshal.RMIvar):
+    if _is_ivar_proxy(v):
         v = v.value
     return v if isinstance(v, str) else None
 
 
 def _walk_event_list(entries, fname, ev_list, path_prefix, note_prefix, include_comments):
     for i, cmd in enumerate(ev_list or []):
-        if not isinstance(cmd, marshal.RMObject) or cmd.class_name != "RPG::EventCommand":
+        if not _is_object_proxy(cmd) or cmd.class_name != "RPG::EventCommand":
             continue
         code = _iv(cmd, "@code")
         rule = TEXT_CODES.get(code)
@@ -80,7 +81,7 @@ def _add(entries, fname, path, category, original, note=""):
 
 def _extract_array_fields(entries, fname, data, rules, include_notes):
     for i, obj in enumerate(data or []):
-        if not isinstance(obj, marshal.RMObject):
+        if not _is_object_proxy(obj):
             continue
         for field, category, label in rules:
             v = _text_of(_iv(obj, field))
@@ -108,7 +109,7 @@ def _extract_system(entries, fname, obj):
     arr_field("@switches", "界面术语", "开关")
     arr_field("@variables", "界面术语", "变量")
     terms = _iv(obj, "@terms")
-    if isinstance(terms, marshal.RMObject):
+    if _is_object_proxy(terms):
         for group in ("@basic", "@params", "@commands"):
             arr = _iv(terms, group)
             for i, v in enumerate(arr or []):
@@ -137,7 +138,7 @@ def extract(data_dir, opts):
             continue
         base = fname.rsplit(".", 1)[0]
         if base == "System":
-            if isinstance(data, marshal.RMObject):
+            if _is_object_proxy(data):
                 _extract_system(entries, fname, data)
         elif base == "Actors":
             _extract_array_fields(entries, fname, data,
@@ -173,36 +174,36 @@ def extract(data_dir, opts):
         elif base == "Troops":
             _extract_array_fields(entries, fname, data, (("@name", "名称", "队伍"),), opts.include_notes)
             for i, troop in enumerate(data or []):
-                if not isinstance(troop, marshal.RMObject):
+                if not _is_object_proxy(troop):
                     continue
                 for pg_i, page in enumerate(_iv(troop, "@pages") or []):
-                    if isinstance(page, marshal.RMObject):
+                    if _is_object_proxy(page):
                         _walk_event_list(entries, fname, _iv(page, "@list"),
                                          "%d/@pages/%d/@list" % (i, pg_i),
                                          "队伍 %d 页面 %d" % (i + 1, pg_i + 1), opts.include_comments)
         elif base == "CommonEvents":
             for i, obj in enumerate(data or []):
-                if not isinstance(obj, marshal.RMObject):
+                if not _is_object_proxy(obj):
                     continue
                 _add(entries, fname, "%d/@name" % i, "名称", _iv(obj, "@name"), "公共事件 %d" % (i + 1))
                 _walk_event_list(entries, fname, _iv(obj, "@list"), "%d/@list" % i,
                                  "公共事件 %d" % (i + 1), opts.include_comments)
         elif base == "MapInfos":
             for k, obj in (data or {}).items():
-                if isinstance(obj, marshal.RMObject):
+                if _is_object_proxy(obj):
                     _add(entries, fname, "%s/@name" % k, "地图名", _iv(obj, "@name"), "地图 %s" % k)
         elif base.startswith("Map") and base[3:].isdigit():
             map_id = base[3:]
             _add(entries, fname, "@display_name", "地图名", _iv(data, "@display_name"), "地图 %s" % map_id)
             for ev_i, ev in enumerate(_iv(data, "@events") or []):
-                if not isinstance(ev, marshal.RMObject):
+                if not _is_object_proxy(ev):
                     continue
                 ev_name = _text_of(_iv(ev, "@name"))
                 if opts.include_event_names and ev_name is not None:
                     _add(entries, fname, "@events/%d/@name" % ev_i, "事件名", ev_name,
                          "地图 %s 事件 %d" % (map_id, ev_i + 1))
                 for pg_i, page in enumerate(_iv(ev, "@pages") or []):
-                    if isinstance(page, marshal.RMObject):
+                    if _is_object_proxy(page):
                         _walk_event_list(entries, fname, _iv(page, "@list"),
                                          "@events/%d/@pages/%d/@list" % (ev_i, pg_i),
                                          "地图 %s 事件 %d" % (map_id, ev_i + 1), opts.include_comments)
@@ -210,9 +211,18 @@ def extract(data_dir, opts):
 
 
 def _unwrap(value):
-    """Unwrap RMIvar to the inner value."""
-    while isinstance(value, marshal.RMIvar):
+    """剥掉 RMIvar 包装，返回内层值。
+
+    注意 `value_layer.RMIvar.value` 每次访问都返回**新的代理实例**
+    （它只是把同一个 Node 重新包一次），因此这里用 while 循环是安全的：
+    内层不再是 RMIvar 时自然退出。原编码信息由代理携带（见 value_layer 说明）。
+    """
+    seen = 0
+    while _is_ivar_proxy(value):
         value = value.value
+        seen += 1
+        if seen > 16:      # 防御：异常数据造成的自引用
+            break
     return value
 
 
@@ -236,9 +246,13 @@ def _navigate(root, path):
     for seg in segs[:-1]:
         cur = _step(cur, seg, path)
     last = segs[-1]
-    if isinstance(cur, marshal.RMObject):
+    if _is_string_proxy(cur):
+        # 字符串上取"下标"会取到字符而不是元素 —— 明确拒绝，避免写错位置
+        raise KeyError(path)
+    if _is_object_proxy(cur):
         return cur, _rmobject_key(cur, last), False
-    if isinstance(cur, list):
+    if isinstance(cur, (list, tuple)) or _is_array_proxy(cur):
+        # 最后一段也要校验：非整数段说明这条路径不被支持（N-07 的明确失败）
         return cur, _index(last, path), False
     return cur, last, False
 
@@ -266,17 +280,71 @@ def _rmobject_key(cur, seg):
     raise KeyError(seg)
 
 
+def _is_ivar_proxy(node):
+    """是否是值层的 ``Ivar`` 代理（``RMIvar``）。"""
+    return type(node).__name__ == "RMIvar"
+
+
+def _is_object_proxy(node):
+    """是否是值层的 Ruby 对象代理（``RMObject``：有 ``class_name`` 与 ``ivars``）。"""
+    return hasattr(node, "ivars") and hasattr(node, "class_name")
+
+
+def _is_string_proxy(node):
+    """是否是值层的字符串/符号代理（``RMStr`` / ``RMSymbol``）。
+
+    这两种在写回时语义不同于数组：**不能**对它们取整数下标
+    （那会取到字符而不是元素，把 402 选择项的路径写错位置）。
+    """
+    return type(node).__name__ in ("RMStr", "RMSymbol")
+
+
+def _rmobject_key(cur, seg):
+    """在 RMObject 的 ivars 里找出 ``seg`` 对应的**真实键名**。
+
+    M2b 之前有两份 marshal 实现，实例变量键名约定不同（一份是带 ``@`` 的
+    Symbol 节点、一份是普通 ``str`` 且可省 ``@``）。收敛到 ``value_layer``
+    之后，``_IvarMap`` 已经自带"原样 / 加 @ / 去 @"三级容忍，因此这里直接
+    委派给它即可 —— 这也正是收敛带来的简化。
+    """
+    ivars = cur.ivars
+    for candidate in _key_candidates(seg):
+        if candidate in ivars:
+            return candidate
+    raise KeyError(seg)
+
+
+def _key_candidates(seg):
+    if seg.startswith("@"):
+        return (seg, seg[1:])
+    return ("@" + seg, seg)
+
+
 def _step(cur, seg, path):
-    """走一层路径。"""
-    if isinstance(cur, list):
+    """走一层路径。
+
+    ⚠ M2b 注意：``marshal`` 现在是 ``core.marshal.value_layer``，
+    ``wrap()`` 把 ``Array`` 包成 ``RMArray`` 代理、``ObjectNode`` 包成
+    ``RMObject`` 代理、字符串包成 ``RMStr`` 代理。因此判据改为**鸭子类型**：
+    认"有 class_name + ivars"的当对象，认"RMArray"的当数组，字符串代理则
+    明确排除（否则会给它取整数下标）。
+    """
+    if _is_string_proxy(cur):
+        raise KeyError(path)
+    if isinstance(cur, (list, tuple)) or _is_array_proxy(cur):
         return cur[_index(seg, path)]
-    if isinstance(cur, marshal.RMObject):
+    if _is_object_proxy(cur):
         return cur.ivars[_rmobject_key(cur, seg)]
     if isinstance(cur, dict):
         if seg in cur:
             return cur[seg]
         return cur[_index(seg, path)]
     raise KeyError(path)
+
+
+def _is_array_proxy(node):
+    """该对象是否是值层的数组代理（``RMArray``）。"""
+    return type(node).__name__ == "RMArray"
 
 
 def _index(seg, path):
@@ -288,14 +356,27 @@ def _index(seg, path):
 
 
 def _set_value(parent, key, value, original):
-    """Set a translated string, preserving the original's encoding wrapper.
+    """写回译文，**跟随原值的编码**。
 
-    ``original`` 参数保留在签名里（调用方一直传），但 M2b 会用它做
+    ``original`` 参数保留在签名里（调用方一直传），留给 M2b 之后的
     "陈旧性校验"（数据变了就不盲写）。当前行为与原实现一致：只按 path 定位后写入。
+
+    编码处理（M2b 起由 ``value_layer`` 支撑）
+    ----------------------------------------
+    原实现用 ``marshal.RMStr(value, enc=enc)`` 构造带编码的字符串。
+    收敛到 ``value_layer`` 后，字符串的编码来自它的 ``Ivar`` 包装
+    （``@encoding = :Windows_31J`` 之类），代理会把它带在 ``.enc`` 上。
+    因此这里：
+
+    * 原值是字符串代理 → **直接用它的 ``.enc``**，把新文本按该编码写回；
+    * 其余情况 → 回落 utf-8。
+
+    这一步不能省：XP 文本是 cp932、VX Ace 是 UTF-8。若一律按 UTF-8 写回，
+    cp932 的旧文本会被重新编码，字节数变化 —— 游戏读到的字符串长度可能不对。
     """
-    if isinstance(parent, marshal.RMObject):
+    if _is_object_proxy(parent):
         old = parent.ivars.get(key)
-    elif isinstance(parent, list):
+    elif isinstance(parent, (list, tuple)) or _is_array_proxy(parent):
         old = parent[_index(key, "set_value")]
     elif isinstance(parent, dict):
         if key in parent:
@@ -305,19 +386,48 @@ def _set_value(parent, key, value, original):
     else:
         raise KeyError("无法在不支持的类型上写值：%s" % type(parent).__name__)
 
-    enc = getattr(_unwrap(old), "enc", None) or "utf-8"
-    new = marshal.RMStr(value, enc=enc)
-    if isinstance(old, marshal.RMIvar):
-        old.value = new
+    enc = _encoding_of(old)
+    if _is_ivar_proxy(old):
+        _assign_string(old, "value", value, enc)
         return
-    if isinstance(parent, marshal.RMObject):
-        parent.ivars[key] = new
-    elif isinstance(parent, list):
-        parent[_index(key, "set_value")] = new
-    elif key in parent:
-        parent[key] = new
+    if _is_object_proxy(parent):
+        parent.ivars[key] = _string_node(value, enc)
+    elif isinstance(parent, (list, tuple)) or _is_array_proxy(parent):
+        parent[_index(key, "set_value")] = _string_node(value, enc)
     else:
-        parent[_index(key, "set_value")] = new
+        if key in parent:
+            parent[key] = _string_node(value, enc)
+        else:
+            parent[_index(key, "set_value")] = _string_node(value, enc)
+
+
+def _encoding_of(node):
+    """取原值声明的编码（没有则 None，由调用方回落 utf-8）。"""
+    if node is None:
+        return None
+    enc = getattr(node, "enc", None)
+    if enc:
+        return enc
+    inner = _unwrap(node)
+    return getattr(inner, "enc", None)
+
+
+def _string_node(text, enc):
+    """构造一个按指定编码存放的字符串节点（值层代理可直接赋给 ivars）。
+
+    为什么不用 ``value_layer.unwrap_to_node(str)``：那个一律按 UTF-8 编码，
+    而这里必须**跟随原编码**（XP 的 cp932 文本重新按 UTF-8 写回会变长）。
+    """
+    return marshal.wrap(_doc_model.String(str(text).encode(enc or "utf-8")))
+
+
+def _assign_string(ivar_proxy, text, enc):
+    """在 ``Ivar`` 代理上原地改内层字符串（保留 Ivar 包装，含 encoding 标记）。"""
+    inner = ivar_proxy.value
+    if hasattr(inner, "value"):
+        inner.value = text
+        return
+    ivar_proxy.value = _string_node(text, enc)
 
 
 def _entry_get(entry, key, default=None):

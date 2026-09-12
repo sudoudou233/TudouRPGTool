@@ -81,10 +81,11 @@ def is_ruby_object(value):
 class _Proxy(object):
     """所有值层代理的基类：持有一个 Node，``node`` 是唯一真相。"""
 
-    __slots__ = ("_node",)
+    __slots__ = ("_node", "_enc")
 
-    def __init__(self, node):
+    def __init__(self, node, enc=None):
         object.__setattr__(self, "_node", node)
+        object.__setattr__(self, "_enc", enc)
 
     @property
     def node(self):
@@ -277,16 +278,18 @@ class RMIvar(_Proxy):
 
     @property
     def value(self):
-        self._node.dirty = True
-        inner = self._node.inner
-        wrapped = wrap(inner)
-        # 让 `.value = x` 能落回 Node：对可赋值的代理直接返回它
-        return wrapped
+        """内层值（若内层是字符串，会带上 Ivar 里声明的编码）。"""
+        return wrap(self._node.inner, enc=self._enc)
 
     @value.setter
     def value(self, new_value):
         self._node.inner = unwrap_to_node(new_value)
         self._node.dirty = True
+
+    @property
+    def encoding(self):
+        """本包装声明的编码（没有则 None）。"""
+        return self._enc
 
     @property
     def ivars(self):
@@ -297,7 +300,18 @@ class RMIvar(_Proxy):
 
 
 class _StrProxy(_Proxy):
-    """字符串代理：``str`` 子类会丢掉 Node 关联，因此这里显式暴露 ``.value``。"""
+    """字符串代理：``str`` 子类会丢掉 Node 关联，因此这里显式暴露 ``.value``。
+
+    编码从哪来：文档模型是**纯字节**的（这正是它能字节保真的原因），
+    字符串的编码信息藏在它的 ``Ivar`` 包装里（``@encoding = :UTF_8`` /
+    ``:Windows_31J`` …）。:func:`wrap` 在把 ``Ivar`` 内层字符串包成代理时
+    会把解析出的编码顺手带上，于是 :attr:`enc` 能反映**原文件的编码**。
+
+    为什么必须保留：XP 的文本是 cp932、VX Ace 是 UTF-8。写回时若一律用
+    UTF-8，cp932 的旧文本会被重新编码，字节数变化 —— 轻则文件"看起来变了"，
+    重则游戏读到的字符串长度不对。所以 ``rgss_data._set_value`` 一直
+    是"跟随原编码写回"，门面层必须支撑这一点。
+    """
 
     __slots__ = ()
 
@@ -314,8 +328,9 @@ class _StrProxy(_Proxy):
 
     @property
     def encoding(self):
-        """记住的原始编码（值模型旧 API 的 ``.enc`` 兼容别名见下）。"""
-        return getattr(self._node, "enc", None) or "utf-8"
+        """原始编码：优先用 Ivar 带来的，其次节点自带的，最后回落到 utf-8。"""
+        enc = self._enc or getattr(self._node, "enc", None)
+        return enc or "utf-8"
 
     #: 旧 API 兼容：``RMStr.enc``
     @property
@@ -675,6 +690,44 @@ def to_plain(value):
     return value
 
 
+#: Ruby 编码符号名 → Python 编码名。
+#:
+#: 只覆盖 RPG Maker 实际会用到的三种（VX Ace 用 UTF-8、XP 用 cp932、
+#: 少数场景用 ascii/latin-1）。识别不出来时返回 None，由调用方回落 utf-8。
+_ENCODING_ALIASES = {
+    "utf_8": "utf-8", "utf8": "utf-8", "utf-8": "utf-8",
+    "windows_31j": "cp932", "shift_jis": "cp932", "sjis": "cp932",
+    "cp932": "cp932", "windows-31j": "cp932",
+    "ascii": "ascii", "us_ascii": "ascii", "binary": "ascii",
+    "ascii_8bit": "ascii",
+    "iso_8859_1": "latin-1", "latin_1": "latin-1", "latin1": "latin-1",
+}
+
+
+def encoding_from_ivars(pairs):
+    """从 ``Ivar`` 的 ivar 列表里解析出编码名（没有就返回 None）。
+
+    只认两种写法，都是 Ruby Marshal 的标准形状：
+
+    * ``@encoding = :UTF_8``（VX Ace 常见）
+    * ``@E = true`` 且另有 ``@encoding``（老写法，值本身不携带编码名）
+    """
+    found = None
+    for sym, value in pairs or ():
+        name = _sym_name(sym)
+        if name not in ("@encoding", "encoding"):
+            continue
+        if isinstance(value, (D.Symbol, D.SymLink)):
+            key = (_sym_name(value) or "").lower().replace("-", "_")
+            found = _ENCODING_ALIASES.get(key)
+        elif isinstance(value, D.String):
+            raw = value.value
+            text = raw.decode("ascii", "replace") if isinstance(raw, bytes) \
+                else str(raw)
+            found = _ENCODING_ALIASES.get(text.lower().replace("-", "_"))
+    return found
+
+
 # ---------------------------------------------------------------------------
 # wrap / unwrap
 # ---------------------------------------------------------------------------
@@ -708,11 +761,15 @@ _build_proxy_table()
 _SCALAR_NODES = (D.NilNode, D.BoolNode, D.Fixnum, D.Bignum)
 
 
-def wrap(node):
+def wrap(node, enc=None):
     """Node → 值层对象。
 
     * ``None`` → ``None``；标量（nil/bool/int/bignum）→ Python 原生值；
+    * ``Ivar`` → 把编码信息解析出来传给内层字符串代理，再返回代理本身
+      （``RMIvar.value`` 也能拿到带编码的字符串）；
     * 其他 → 对应的 ``RM*`` 代理（持有同一个 Node，因此改它就是改文档）
+
+    ``enc`` 参数供内部递归时传递已解析出的编码，调用方一般不用传。
     """
     if node is None:
         return None
@@ -723,12 +780,15 @@ def wrap(node):
     if isinstance(node, (D.Fixnum, D.Bignum)):
         return node.value
     if isinstance(node, D.Link):
-        resolved = node.to_py()
-        return resolved
+        return node.to_py()
+    if isinstance(node, D.Ivar):
+        # 编码藏在 Ivar 的 ivar 里；把它带上，内层字符串写回时才知道用哪种编码
+        resolved = enc or encoding_from_ivars(node.ivars)
+        return RMIvar(node, resolved)
     proxy_cls = _NODE_TO_PROXY.get(type(node))
     if proxy_cls is None:
         return node.to_py()
-    return proxy_cls(node)
+    return proxy_cls(node, enc)
 
 
 def unwrap(value):

@@ -639,6 +639,33 @@ class ModuleNode(Node):
         return {"__ruby__": "Module", "name": self.name.decode('utf-8', 'replace')}
 
 
+#: ---------------------------------------------------------------------------
+#: 节点访问辅助：直接操作节点树时用（``core/formats/rgss_save.py`` 与测试都要）
+#:
+#: ``ObjectNode.ivars`` 是 ``(Symbol 节点, 值节点)`` 的**列表**而不是 dict，
+#: 因此按名字取字段需要这个小工具。收敛到值层（``value_layer``）的调用方
+#: 不必用它 —— 值层的 ``_IvarMap`` 已经做了 dict 视图。
+#: ---------------------------------------------------------------------------
+def ivar(node, name, default=None):
+    """按名字取 ``ObjectNode`` 的实例变量值（容忍 ``@`` 前缀可有可无）。
+
+    例如 ``ivar(obj, "name")`` 与 ``ivar(obj, "@name")`` 等价。
+    """
+    pairs = getattr(node, "ivars", None)
+    if not pairs:
+        return default
+    candidates = (name, name[1:]) if name.startswith("@") else ("@" + name, name)
+    for sym, value in pairs:
+        if _sym_name(sym) in candidates:
+            return value
+    return default
+
+
+def ivar_names(node):
+    """列出 ``ObjectNode`` 的实例变量名（已解码，带 ``@``）。"""
+    return [_sym_name(sym) for sym, _value in (getattr(node, "ivars", None) or [])]
+
+
 class Parser:
     def __init__(self, buf, standard=False):
         self.buf = buf

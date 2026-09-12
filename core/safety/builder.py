@@ -8,7 +8,7 @@
           install_user_font, copy_tree
 @depends  core.safety.backup, core.safety.atomic, core.safety.fontutil,
           core.formats.mv_mz_data, core.formats.rgss_data,
-          core.marshal.value_model
+          core.marshal.value_layer
 @tested   tests/compat/test_build_backup.py, tests/compat/test_m2a_regressions.py
 @footprint docs/MODULES.md#coresafety
 
@@ -42,7 +42,8 @@ import shutil
 import time
 
 from ..formats import mv_mz_data, rgss_data
-from ..marshal import value_model as marshal
+from ..marshal import doc_model as _doc_model
+from ..marshal import value_layer as marshal
 from . import backup as backup_mod
 from . import fontutil
 from .atomic import AtomicWriteError, assert_safe_target, atomic_write_text, next_free_dir
@@ -233,42 +234,80 @@ def inject_font_script(scripts_path, family, engine):
     """往 ``Scripts.rvdata2`` / ``Scripts.rxdata`` 追加一条 ``Font.default_name`` 脚本。
 
     **原子写**（B-02）。返回 ``True`` 表示已写入。
+
+    M2b：由 ``value_model`` 切到 ``core.marshal.value_layer``（前者已收敛删除）。
+    这里刻意**直接构造 ``doc_model`` 节点**而不是先做 Python 值再转换，原因：
+
+    * XP 的脚本要用 **cp932** 编码写回，而 ``value_layer.unwrap_to_node(str)``
+      一律按 UTF-8 编码 —— 会把 cp932 文本写错；
+    * VX Ace 需要 ``Ivar`` 包装携带 ``@encoding = :UTF_8``，这是 Ruby 侧
+      识别字符串编码的标记，不是普通字符串能表达的。
+
+    也就是说："用值层做**读写**，用节点层做**精确构造**"。
     """
     with open(scripts_path, "rb") as f:
         root = marshal.loads(f.read())
-    if not isinstance(root, list):
-        return False
+    items = _array_items(root)
+    if items is None:
+        return False         # Scripts 的顶层不是数组 → 不是我们能改的形状
     max_id = 0
-    for item in root:
-        if isinstance(item, list) and item and isinstance(item[0], int):
-            max_id = max(max_id, item[0])
+    for item in items:
+        values = _array_items(item)
+        if values and isinstance(values[0], int):
+            max_id = max(max_id, values[0])
 
     family_safe = family.replace("\\", "\\\\").replace('"', '\\"')
     code = 'Font.default_name = "%s"' % family_safe
     if engine == "xp":
         try:
             code_bytes = code.encode("cp932")
+            name_bytes = "TranslationFont".encode("cp932")
         except UnicodeEncodeError:
             return False
-        code_str = marshal.RMStr(code_bytes.decode("cp932"), enc="cp932")
-        name_str = marshal.RMStr("TranslationFont", enc="cp932")
-        entry = [max_id + 1, name_str, code_str]
+        entry = [max_id + 1,
+                 _doc_model.String(name_bytes),
+                 _doc_model.String(code_bytes)]
     else:
-        code_str = marshal.RMIvar(
-            marshal.RMStr(code, enc="utf-8"),
-            {marshal.RMSymbol("E"): True,
-             marshal.RMSymbol("encoding"): marshal.RMSymbol("UTF_8")})
-        name_str = marshal.RMIvar(
-            marshal.RMStr("TranslationFont", enc="utf-8"),
-            {marshal.RMSymbol("E"): True,
-             marshal.RMSymbol("encoding"): marshal.RMSymbol("UTF_8")})
-        entry = [max_id + 1, name_str, code_str]
+        entry = [max_id + 1,
+                 _utf8_ivar("TranslationFont"),
+                 _utf8_ivar(code)]
 
-    root.append(entry)
+    items.append(_doc_model.Array([_to_node(v) for v in entry]))
+    root.dirty = True
     payload = marshal.dumps(root)
     from .atomic import atomic_write_bytes
     atomic_write_bytes(scripts_path, payload)
     return True
+
+
+def _utf8_ivar(text):
+    """构造 ``I`` 包装的 UTF-8 字符串（VX Ace 的 Scripts 需要这个形状）。"""
+    return _doc_model.Ivar(
+        _doc_model.String(text.encode("utf-8")),
+        [(_doc_model.Symbol(b"E"), _doc_model.BoolNode(True)),
+         (_doc_model.Symbol(b"encoding"),
+          _doc_model.Symbol(b"UTF_8"))])
+
+
+def _to_node(value):
+    """把 Python 值转成节点（已构造好的节点原样返回）。"""
+    if isinstance(value, _doc_model.Node):
+        return value
+    return marshal.unwrap_to_node(value)
+
+
+def _array_items(node):
+    """若是个数组（值层代理或原生 list）就返回其**可变元素列表**，否则 None。
+
+    返回的是底层 list 对象本身，因此 ``items.append(...)`` 会真的改到节点树
+    （``RMArray.items`` 是 ``doc_model.Array.items`` 的引用）。
+    """
+    if isinstance(node, list):
+        return node
+    inner = getattr(node, "node", None)
+    if inner is not None and isinstance(getattr(inner, "items", None), list):
+        return inner.items
+    return None
 
 
 def apply_font(game_root, engine, font_path, touched_log=None, created_log=None):

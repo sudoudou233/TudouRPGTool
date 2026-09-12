@@ -5,6 +5,84 @@
 
 ---
 
+## 2026-09-12 ｜ M2b（3/3 之三）：marshal 收敛完成 —— 旧值模型删除，需求 §3.3 三类重复全部归零
+
+### 改了什么
+
+| 文件 | 变更 |
+| --- | --- |
+| `core/marshal/value_layer.py` | 补 **ivar 编码传递**：从 ``Ivar`` 的 ``@encoding = :Windows_31J`` 解析出编码并带到内层字符串代理（`.enc`）。这是写回 cp932 数据不损坏的前提 |
+| `core/marshal/doc_model.py` | 新增节点访问辅助 `ivar(node, name)` / `ivar_names(node)`（``ivars`` 是列表不是 dict，按名字取字段需要它） |
+| `core/formats/rgss_data.py` | 由 `value_model` 切到 `value_layer`；判据统一为**鸭子类型**（`_is_object_proxy` / `_is_array_proxy` / `_is_ivar_proxy` / `_is_string_proxy`）；`_set_value` 改为**跟随原编码**写回 |
+| `core/safety/builder.py` | `inject_font_script` 由 `value_model` 切到 `value_layer` + 节点层精确构造 |
+| `core/marshal/value_model.py` | **删除** |
+| `core/marshal/__init__.py` | `CONVERGENCE_STATUS`：`"pending"` → **`"merged"`** |
+| `tests/compat/test_marshal_compat.py` | `TestValueModelRoundtrip` → `TestValueLayerRoundtrip`；新增 **`TestMarshalConvergence`**（6 例静态断言） |
+| `tests/compat/test_m2a_regressions.py` | N-07 夹具改用**节点树**（更贴近真实：真实存档本来就是解析出的节点树）；新增两条**端到端**测试（真 `apply_to_files` + 原子写 + 重读校验） |
+
+### 为什么
+
+需求 §3.3 的验收硬指标："合并后上述三类职责各只有一份实现"。
+M2b 前两步已收敛 formats 与删除脚手架，本步完成最后一项。
+
+### 关键设计：为什么值层不重新解析
+
+`value_layer` 的代理**直接持有并改写 `doc_model` 的 Node**：
+改代理 = 改 Node，因此 `doc_model.dumps` 里未触碰的子树仍吐原始字节，
+字节保真与"值层便利"同时成立，且**全工程只有一个解析器**。
+若走"值 ↔ 节点来回转换"的路线，字节保真会丢失 —— 这是本步最核心的取舍。
+
+### 本步的两个真实难点
+
+1. **编码传递**：`doc_model` 是纯字节的（这正是它字节保真的原因），
+   字符串编码藏在 `Ivar` 包装里。若不把它带到 `RMStr.enc`，
+   `_set_value` 就会一律按 UTF-8 写回 —— XP 的 cp932 文本会被重新编码，
+   字节数变化，游戏读到的字符串长度可能不对。
+   修法：`wrap()` 遇到 `Ivar` 时解析 `@encoding` 并传给内层代理。
+2. **鸭子类型判据**：`wrap()` 把 `Array`/`ObjectNode`/`String` 分别包成
+   `RMArray`/`RMObject`/`RMStr` **代理**，`isinstance(x, marshal.RMObject)`
+   这类旧判据不再成立。统一改为按能力判断（有 `class_name`+`ivars` 即对象，
+   类名 `RMArray` 即数组，字符串代理明确排除在"可下标"之外 ——
+   否则给字符串取整数下标会取到字符，把 402 选择项写错位置）。
+
+### 怎么验证
+
+```powershell
+python tests/run_all.py                      # 475 例，0 失败 0 错误
+$env:TUDOU_RPGTOOL_SAMPLES='D:\gamess'
+python tests/run_all.py                      # 300 个真实 .rvdata2 零漂移
+python tools/check_footprint.py --quiet      # 37 文件，退出码 0
+python app.py --check                        # 退出码 0
+```
+
+`/api/health` 实测：
+
+```json
+{"engines":"merged","formats":"merged","marshal":"merged","all_merged":true}
+```
+
+需求 §3.3 三类重复的实现文件核对：`core/engines.py`、`core/formats/jsoncodec.py`、
+`core/marshal/{doc_model,value_layer}.py` 各就各位；
+`core/marshal/value_model.py` 与 `core/_refbridge.py` 均已删除。
+
+### 防退化断言（`TestMarshalConvergence`）
+
+* `CONVERGENCE_STATUS == "merged"`
+* `value_model.py` 不得复活
+* 不得有模块 import `value_model`
+* `core/marshal/` 下只允许 `doc_model.py` + `value_layer.py` + `__init__.py`，
+  且门面里不得出现 `class Parser` / `_parse_fixnum` / `struct.unpack(` / `buf[self.pos]`
+* 两个真实调用方都必须 import `value_layer`
+* `/api/health` 的 `all_merged` 必须为 true
+
+### 遗留
+
+* M2b 完成。**下一步 M3a**：翻译功能接入（扫描 → 翻译 → 生成汉化版 → 还原），
+  计划见 `docs/STATE.md` §7
+* 已知未验证边界不变：真机 VX/XP 样本仍空白；Python 3.8 仅静态检查
+
+---
+
 ## 2026-09-12 ｜ M2b（3/3 之二）：值层门面 `value_layer.py` 落地（marshal 收敛的实施第一步）
 
 ### 改了什么

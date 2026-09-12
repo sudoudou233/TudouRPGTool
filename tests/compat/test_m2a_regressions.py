@@ -412,35 +412,114 @@ class TestB26NoTopLevelWinreg(unittest.TestCase):
 
 
 class TestN07RgssMultiValueWriteback(unittest.TestCase):
-    """**N-07**：多值条目（402 选择项）的写回路径在 RGSS 侧必须可用。"""
+    """**N-07**：多值条目（402 选择项）的写回路径在 RGSS 侧必须可用。
+
+    M2b 起 ``core/formats/rgss_data.py`` 用的是 ``core.marshal.value_layer``
+    （旧的 ``value_model`` 已收敛删除），因此这里用**节点树**构造夹具 ——
+    这也更贴近真实：真实存档本来就是从字节解析出来的节点树。
+    """
+
+    @staticmethod
+    def _make_root():
+        """构造 ``Game_Event``：@list[0] 是一条 402 指令，选项是嵌套列表。"""
+        from core.marshal import doc_model as D
+        return D.ObjectNode(D.Symbol(b"Game_Event"), [
+            (D.Symbol(b"@list"), D.Array([
+                D.ObjectNode(D.Symbol(b"RPG::EventCommand"), [
+                    (D.Symbol(b"@code"), D.Fixnum(402)),
+                    (D.Symbol(b"@parameters"), D.Array([
+                        D.Array([D.String("是".encode("utf-8")),
+                                 D.String("否".encode("utf-8"))]),
+                        D.Fixnum(1),
+                        D.Fixnum(0),
+                    ])),
+                ]),
+            ])),
+        ])
 
     def test_multi_value_entry_roundtrip_through_paths(self):
-        """用合成的 marshal 对象验证 ``_navigate``/``_set_value`` 支持
-        ``.../parameters/0/1`` 这种"列表里的列表"路径。"""
+        """``.../parameters/0/1`` 这种"列表里的列表"路径必须能定位并写回。"""
         from core.formats import rgss_data
-        from core.marshal import value_model as marshal
+        from core.marshal import value_layer as V
 
-        root = marshal.RMObject("Game_Event", {
-            "@list": [
-                marshal.RMObject("RPG::EventCommand", {
-                    "code": 402,
-                    "parameters": [["是", "否"], 1, 0],
-                }),
-            ],
-        })
-        # 路径：list/0/parameters/0/1 -> ["是","否"][1] == "否"
+        root = V.wrap(self._make_root())
+        # 路径：@list/0/@parameters/0/1 -> ["是","否"][1] == "否"
         parent, key, _ = rgss_data._navigate(root, "list/0/parameters/0/1")
         rgss_data._set_value(parent, key, "No", "否")
-        params = root.ivars["@list"][0].ivars["parameters"]
-        self.assertEqual(params[0][1], "No",
+        params = root.ivars["@list"][0].ivars["@parameters"]
+        self.assertEqual(params[0][1].value, "No",
                          "**N-07**：多值条目的第 2 个选项必须能被写回")
 
     def test_navigate_rejects_non_numeric_index_cleanly(self):
         from core.formats import rgss_data
-        from core.marshal import value_model as marshal
-        root = marshal.RMObject("X", {"@list": [marshal.RMStr("是")]})
+        from core.marshal import doc_model as D
+        from core.marshal import value_layer as V
+
+        root = V.wrap(D.ObjectNode(D.Symbol(b"X"), [
+            (D.Symbol(b"@list"), D.Array([D.String("是".encode("utf-8"))])),
+        ]))
         with self.assertRaises((KeyError, ValueError, TypeError, IndexError)):
             rgss_data._navigate(root, "list/是")
+
+    def test_apply_to_files_writes_through_node_tree(self):
+        """**端到端**：真实 ``apply_to_files`` 走节点树 + 原子写。
+
+        M2b 之前没有覆盖这个组合（旧测试用值模型构造、新实现用节点树），
+        因此这里补上：写一个合成 ``Objects.rvdata2``，经 apply_to_files 改一条
+        译文，再解析回来确认改动落地、且其它字段原样。
+        """
+        import tempfile
+        from core.formats import rgss_data
+        from core.marshal import doc_model as D
+
+        with tempfile.TemporaryDirectory(prefix="rgssapply_") as tmp:
+            path = os.path.join(tmp, "CommonEvents.rvdata2")
+            root = self._make_root()
+            with open(path, "wb") as f:
+                f.write(D.dumps(root))
+
+            entries = {
+                "CommonEvents.rvdata2": [{
+                    "file": "CommonEvents.rvdata2",
+                    "path": "@list/0/@parameters/0/0",
+                    "category": "选择项",
+                    "original": "是",
+                    "translated": "Yes",
+                    "status": "translated",
+                }],
+            }
+            stats = rgss_data.apply_to_files({"data_dir": tmp}, entries)
+            self.assertEqual(stats["entries"], 1, stats)
+            self.assertEqual(stats["files"], 1, stats)
+
+            with open(path, "rb") as f:
+                again = D.loads(f.read())
+            # 节点树的 ivars 是 (Symbol, 值) 列表 → 用 doc_model.ivar 按名字取
+            command = D.ivar(again, "@list").items[0]
+            params = D.ivar(command, "@parameters").items[0]
+            self.assertEqual(params.items[0].to_py(), "Yes", "译文应已写入")
+            self.assertEqual(params.items[1].to_py(), "否",
+                             "未翻译的选项必须原样保留")
+            self.assertEqual(D.ivar(command, "@code").value, 402,
+                             "未触碰的字段必须原样保留")
+
+    def test_apply_to_files_skips_untranslated(self):
+        import tempfile
+        from core.formats import rgss_data
+        from core.marshal import doc_model as D
+
+        with tempfile.TemporaryDirectory(prefix="rgssskip_") as tmp:
+            path = os.path.join(tmp, "CommonEvents.rvdata2")
+            with open(path, "wb") as f:
+                f.write(D.dumps(self._make_root()))
+            entries = {"CommonEvents.rvdata2": [{
+                "file": "CommonEvents.rvdata2",
+                "path": "@list/0/@parameters/0/0",
+                "original": "是", "translated": "", "status": "pending",
+            }]}
+            stats = rgss_data.apply_to_files({"data_dir": tmp}, entries)
+            self.assertEqual(stats["entries"], 0)
+            self.assertEqual(stats["files"], 0, "未翻译时不应改写文件")
 
 
 class TestN08SymbolEscapes(unittest.TestCase):

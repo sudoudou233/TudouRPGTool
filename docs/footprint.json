@@ -320,14 +320,14 @@
       ],
       "depends": [
         "core.textutil",
-        "core.marshal.value_model",
+        "core.marshal.value_layer",
         "core.formats.mv_mz_data"
       ],
       "tested": "tests/compat/test_formats_compat.py",
       "footprint": "docs/MODULES.md#coreformats",
       "vendored": true,
       "note": "vendored：来自 rpgmaker_translation_tool/tool/vxace.py。 已知缺陷 B-02（非原子写）、B-13（original 参数未用于校验）。",
-      "lines": 388
+      "lines": 498
     },
     "core/formats/rgss_save.py": {
       "feature": "cheats",
@@ -369,7 +369,7 @@
       "layer": "core",
       "public": [
         "doc_model",
-        "value_model"
+        "value_layer"
       ],
       "depends": [
         "(stdlib only)"
@@ -398,7 +398,7 @@
       "footprint": "docs/MODULES.md#coremarshal",
       "vendored": true,
       "note": "vendored：来自 rpgmaker_cheating_tool/rmarshal.py（原样搬入）。 已知缺陷 B-10（Parser._fixnum 重复定义，XP/VX 写回漂移） 在 M2a 修复；M2b 收敛后本文件删除。",
-      "lines": 875
+      "lines": 902
     },
     "core/marshal/value_layer.py": {
       "feature": "none",
@@ -418,36 +418,7 @@
       "tested": "tests/unit/test_marshal_value.py",
       "footprint": "docs/MODULES.md#coremarshal",
       "vendored": false,
-      "lines": 784
-    },
-    "core/marshal/value_model.py": {
-      "feature": "none",
-      "layer": "core",
-      "public": [
-        "loads",
-        "dumps",
-        "RMStr",
-        "RMIvar",
-        "RMObject",
-        "RMDict",
-        "RMSymbol",
-        "RMStruct",
-        "RMUserDefined",
-        "RMUserMarshal",
-        "RMRegexp",
-        "RMData",
-        "RMClass",
-        "RMModule",
-        "RMFloat"
-      ],
-      "depends": [
-        "(stdlib only)"
-      ],
-      "tested": "tests/compat/test_marshal_compat.py",
-      "footprint": "docs/MODULES.md#coremarshal",
-      "vendored": true,
-      "note": "vendored：来自 rpgmaker_translation_tool/tool/marshal.py（原样搬入）。 已知缺陷 B-12（bignum 写回崩溃）、B-13、B-28（gbk→cp932 误映射） 在 M2b 收敛时随门面层一并处置。",
-      "lines": 708
+      "lines": 844
     },
     "core/paths.py": {
       "feature": "none",
@@ -557,7 +528,7 @@
       "tested": "tests/compat/test_build_backup.py, tests/compat/test_m2a_regressions.py",
       "footprint": "docs/MODULES.md#coresafety",
       "vendored": false,
-      "lines": 579
+      "lines": 618
     },
     "core/safety/fontutil.py": {
       "feature": "translate",

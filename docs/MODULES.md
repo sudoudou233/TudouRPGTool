@@ -114,13 +114,21 @@
 
 | 文件 | 职责 | 公开 API | 谁调用 |
 | --- | --- | --- | --- |
-| `doc_model.py` | **文档模型**：22 个 Node 类，`Node.raw` + `dirty` 增量字节保真，支持多流与 XP/VX 标准模式 | `Node`、`Parser`、`loads`、`dumps`、`load_streams`、`mark_dirty`、`VERSION` | `core/formats/rgss_save.py`、`tests/compat/test_marshal_compat.py` |
-| `value_model.py` | **值模型**：13 个 `RM*` 类，编码感知，可直接从 Python 值构造并 dump | `loads`、`dumps`、`RMStr`、`RMIvar`、`RMObject`、`RMDict`、`RMSymbol`、`RMStruct`、`RMUserDefined`、`RMUserMarshal`、`RMRegexp`、`RMData`、`RMClass`、`RMModule`、`RMFloat` | `core/formats/rgss_data.py`、`core/safety/backup.py` |
-| `__init__.py` | 收敛状态标记 | `CONVERGENCE_STATUS`（当前 `"pending"`） | `tools/check_footprint.py` |
+| `doc_model.py` | **二进制层**：Node 树（22 个类），`Node.raw` + `dirty` 增量字节保真，支持多流与 XP/VX 标准模式。**全工程唯一的解析器与序列化器** | `Node`、`Parser`、`loads`、`dumps`、`load_streams`、`mark_dirty`、`VERSION`、`ivar()`、`ivar_names()` | `core/formats/rgss_save.py`、`core/marshal/value_layer.py`、测试 |
+| `value_layer.py` | **值层门面**：在 Node 之上提供"像 Python 对象一样读写"的代理。**改代理 = 改 Node**，因此字节保真天然成立，且不需要第二份解析器 | `RMObject`、`RMIvar`、`RMStr`、`RMSymbol`、`RMArray`、`RMDict`、`RMStruct`、`RMUserDefined`、`RMUserMarshal`、`RMRegexp`、`RMData`、`RMClass`、`RMModule`、`RMFloat`、`wrap`、`unwrap`、`unwrap_to_node`、`loads`、`load_streams`、`dumps`、`is_ruby_object`、`to_plain` | `core/formats/rgss_data.py`、`core/safety/builder.py` |
+| `__init__.py` | 收敛状态标记 | `CONVERGENCE_STATUS`（**已为 `"merged"`**） | `tools/check_footprint.py`、`ui/routes.py` |
 
-**改动影响**：这两份实现**都必须通过 300 个真实样本的字节级往返测试**
-（`tests/compat/test_marshal_compat.py`）。修改任何一份之后必须重跑 compat 层。
-**M2b 目标**：以 `doc_model` 为二进制层主体、`value_model` 降为对象门面，收敛为一份。
+**改动影响**：全工程**只有一个 marshal 解析器**（`doc_model`），值层只是它的视图。
+因此改 `doc_model` 会影响所有 marshal 路径（RGSS 游戏数据 + RGSS 存档 +
+字体脚本注入），改后必须重跑 compat 层（300 个真实样本零漂移）。
+
+**收敛纪律**（由 `tests/compat/test_marshal_compat.py::TestMarshalConvergence`
+静态断言守护）：
+
+* `value_layer` **不得**出现 `class Parser` / `_parse_fixnum` / 编码逻辑
+  —— 那等于又造一份实现
+* `value_model.py` 不得复活、也不得被任何模块 import
+* `core/marshal/` 下只允许 `doc_model.py` + `value_layer.py` + `__init__.py`
 
 ### core/formats/
 
@@ -259,7 +267,7 @@ atomic  ←  backup  ←  builder  →  fontutil
 | --- | --- | --- | --- |
 | 引擎识别 + 目录/存档发现 | `core/engines.py` | ✅ **merged**（从 M1 第一天起就只有一份，未经历"两份再合并"） | `tests/unit/test_engines.py`：`TestFrozenDetectionFixtures`（13 种判据组合，两套 MV/MZ 判据都覆盖）+ `TestFrozenRealGameBaseline`（7 个真实游戏，需 `TUDOU_RPGTOOL_SAMPLES`） |
 | MV/MZ 编解码（JSON / 压缩 / 加密包装 / JsonEx 元数据） | `core/formats/jsoncodec.py` | ✅ **merged**（M2b 抽出，`CONVERGENCE_STATUS == "merged"`） | `tests/unit/test_jsoncodec.py::TestConvergence`（静态断言禁止第二份 `base64.b64decode` / 密钥派生 / `zlib` 调用） |
-| Ruby Marshal | `core/marshal/` | ⬜ **pending**（仍有 `doc_model` + `value_model` 两份） | `tests/compat/test_marshal_compat.py`（300 真实样本零漂移）+ `test_standard_mode.py`（合成 VX/XP） |
+| Ruby Marshal | `core/marshal/doc_model.py`（二进制层）+ `core/marshal/value_layer.py`（值层门面） | ✅ **merged**（M2b；`CONVERGENCE_STATUS == "merged"`，旧 `value_model.py` 已删） | `tests/compat/test_marshal_compat.py`（300 真实样本零漂移 + `TestMarshalConvergence` 静态断言）+ `tests/compat/test_standard_mode.py`（合成 VX/XP）+ `tests/unit/test_marshal_value.py`（值层语义 36 例） |
 
 **`core/_refbridge.py` 已删除**（M2b）：它曾是 M1/M2a 的临时脚手架，
 用于在收敛期间加载旧实现做对照。删除前先把等价性证据**冻结为不依赖参考工具的夹具**

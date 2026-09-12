@@ -4,8 +4,8 @@
 @feature  none
 @layer    tests
 @public   TestMarshalRoundtripSynthetic, TestMarshalRoundtripRealSamples,
-          TestValueModelRoundtrip
-@depends  core.marshal.doc_model, core.marshal.value_model
+          TestValueLayerRoundtrip
+@depends  core.marshal.doc_model, core.marshal.value_layer
 @tested   (本文件即测试)
 @footprint docs/MODULES.md#coremarshal
 
@@ -44,7 +44,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from core import paths  # noqa: E402
-from core.marshal import doc_model, value_model  # noqa: E402
+from core.marshal import doc_model, value_layer  # noqa: E402
 
 #: 只在这些子目录名里找样本（RPG Maker 的数据目录）
 SAMPLE_SUBDIRS = ("Data", "data")
@@ -264,32 +264,147 @@ class TestMarshalRoundtripRealSamples(unittest.TestCase):
                                 % len(self.files))
 
 
-class TestValueModelRoundtrip(unittest.TestCase):
-    """值模型（翻译工具侧）的往返能力，用于 M2b 收敛时的对照。"""
+class TestValueLayerRoundtrip(unittest.TestCase):
+    """值层（``core.marshal.value_layer``）的往返能力。
 
-    def test_value_model_roundtrips_synthetic(self):
-        m = value_model
+    M2b：本类原先测的是 `value_model`（翻译工具侧的旧值模型）。
+    收敛后值模型已删除，本类改为测**取代它的门面** —— 断言保持等价：
+    从 Python 值出发构造、往返字节稳定、UTF-8 文本不丢。
+    """
+
+    def test_python_values_roundtrip(self):
+        m = value_layer
         cases = {
             "int": 42,
-            "str": m.RMStr("中文", enc="utf-8"),
+            "str": "中文",
             "list": [1, 2, 3],
             "dict": {"a": 1, "b": 2},
-            "object": m.RMObject("RPG::MapInfo",
-                                 {"@name": m.RMStr("地图一"),
-                                  "@order": 1}),
+            "nested": {"items": [1, 2], "flag": True, "none": None},
         }
         for name, value in cases.items():
             with self.subTest(case=name):
-                raw = m.dumps(value)
+                raw = m.dumps(m.wrap(m.unwrap(value)))
                 again = m.loads(raw)
                 self.assertEqual(m.dumps(again), raw,
-                                 "%s 的值模型往返不是字节稳定的" % name)
+                                 "%s 的值层往返不是字节稳定的" % name)
+
+    def test_object_constructed_from_python_values(self):
+        """从 Python 值构造 Ruby 对象（原 value_model 的主要用途）。"""
+        m = value_layer
+        node = m.unwrap({"__ruby__": "Object", "class": "RPG::MapInfo",
+                         "ivars": {"@name": "地图一", "@order": 1}})
+        self.assertIsInstance(node, doc_model.Hash)
+        obj_node = doc_model.ObjectNode(
+            doc_model.Symbol(b"RPG::MapInfo"), [
+                (doc_model.Symbol(b"@name"),
+                 doc_model.String("地图一".encode("utf-8"))),
+                (doc_model.Symbol(b"@order"), doc_model.Fixnum(1)),
+            ])
+        raw = m.dumps(m.wrap(obj_node))
+        again = m.loads(raw)
+        self.assertEqual(again.class_name, "RPG::MapInfo")
+        self.assertEqual(again.ivars["@name"].value, "地图一")
+        self.assertEqual(again.ivars["@order"], 1)
 
     def test_utf8_string_survives(self):
-        m = value_model
+        m = value_layer
         text = "中文·テスト·한글"
-        raw = m.dumps(m.RMStr(text, enc="utf-8"))
-        self.assertEqual(m.loads(raw), text)
+        raw = m.dumps(m.wrap(doc_model.String(text.encode("utf-8"))))
+        self.assertEqual(m.loads(raw).value, text)
+
+
+class TestMarshalConvergence(unittest.TestCase):
+    """**M2b 收敛成果的静态断言**（需求 §3.3 验收硬指标）。
+
+    三类重复实现收敛为一份之后，必须有断言防止它**悄悄退回去**：
+    以后有人"顺手"再写一份实现、或把导入改回旧模块，这里会立刻红灯。
+    """
+
+    def _read(self, rel_path):
+        import io as _io
+        with _io.open(os.path.join(_ROOT, rel_path), encoding="utf-8") as f:
+            return f.read()
+
+    def test_convergence_status_is_merged(self):
+        from core import marshal
+        self.assertEqual(marshal.CONVERGENCE_STATUS, "merged")
+
+    def test_value_model_no_longer_exists(self):
+        """旧的第二份实现必须已删除。"""
+        path = os.path.join(_ROOT, "core", "marshal", "value_model.py")
+        self.assertFalse(os.path.isfile(path),
+                         "core/marshal/value_model.py 又出现了 —— "
+                         "需求 §3.3 要求 Marshal 只有一份实现")
+
+    def test_no_module_imports_value_model(self):
+        """任何模块都不得再 import value_model（注释里提历史名字是允许的）。"""
+        offenders = []
+        for dirpath, dirnames, filenames in os.walk(_ROOT):
+            dirnames[:] = [d for d in dirnames
+                           if d not in ("__pycache__", ".git", "runtime")]
+            for name in filenames:
+                if not name.endswith(".py"):
+                    continue
+                full = os.path.join(dirpath, name)
+                rel = os.path.relpath(full, _ROOT).replace(os.sep, "/")
+                try:
+                    text = self._read(rel)
+                except Exception:
+                    continue
+                for line in text.splitlines():
+                    stripped = line.strip()
+                    if stripped.startswith("#"):
+                        continue
+                    if "value_model" in stripped and (
+                            stripped.startswith("from ") or
+                            stripped.startswith("import ")):
+                        offenders.append("%s: %s" % (rel, stripped))
+        self.assertEqual(offenders, [],
+                         "仍有模块 import value_model：%s" % offenders)
+
+    def test_only_one_binary_implementation(self):
+        """``core/marshal/`` 下只能有一份二进制实现。
+
+        当前布局：``doc_model``（二进制层）+ ``value_layer``（门面）+ ``__init__``。
+        判据是"门面里不得出现**解析/编码逻辑**"，而不是"不得出现同名函数" ——
+        门面**允许**提供 `loads`/`dumps`/`load_streams` 这类**转发**入口
+        （它们必须调用 ``doc_model``，不能自己解析）。
+        """
+        marshal_dir = os.path.join(_ROOT, "core", "marshal")
+        files = [f for f in sorted(os.listdir(marshal_dir))
+                 if f.endswith(".py") and f != "__init__.py"]
+        self.assertEqual(files, ["doc_model.py", "value_layer.py"],
+                         "core/marshal/ 的文件清单变了：%s" % files)
+
+        facade = self._read("core/marshal/value_layer.py")
+        # 这些是"第二份实现"的标志：自己解析字节或自己编码
+        for forbidden in ("class Parser", "def _parse_fixnum",
+                          "def _fixnum_to_bytes", "def parse_token",
+                          "struct.unpack(", "buf[self.pos]"):
+            with self.subTest(symbol=forbidden):
+                self.assertNotIn(forbidden, facade,
+                                 "门面层不得包含解析/编码实现（%s）" % forbidden)
+        # 上层入口必须转发给 doc_model
+        self.assertIn("D.load_streams", facade,
+                      "load_streams 应转发给 doc_model，而不是自己实现")
+
+    def test_real_consumers_use_the_facade(self):
+        """两个真实调用方都必须走 value_layer。"""
+        for rel in ("core/formats/rgss_data.py", "core/safety/builder.py"):
+            with self.subTest(module=rel):
+                text = self._read(rel)
+                self.assertIn("value_layer", text)
+                self.assertNotIn("import value_model", text)
+
+    def test_health_reports_all_merged(self):
+        """``/api/health`` 的收敛段必须报三类全部合并。"""
+        from ui.routes import convergence_status
+        status = convergence_status()
+        self.assertEqual(status["marshal"], "merged")
+        self.assertEqual(status["formats"], "merged")
+        self.assertEqual(status["engines"], "merged")
+        self.assertTrue(status["all_merged"],
+                        "三类职责应全部收敛：%s" % status)
 
 
 if __name__ == "__main__":
