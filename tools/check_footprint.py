@@ -295,18 +295,35 @@ class Checker(object):
             except Exception:
                 continue
             available = set()
+            lazy_names = set()
+            has_getattr = False
             for node in tree.body:
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                     available.add(node.name)
+                    if node.name == "__getattr__":
+                        has_getattr = True
                 elif isinstance(node, ast.Assign):
                     for target in node.targets:
                         if isinstance(target, ast.Name):
                             available.add(target.id)
+                            # 收集"可能是懒加载子模块名"的集合字面量
+                            if target.id in ("__all__", "_SUBMODULES") and \
+                                    isinstance(node.value, (ast.List, ast.Tuple, ast.Set)):
+                                for element in node.value.elts:
+                                    if isinstance(element, ast.Constant) and \
+                                            isinstance(element.value, str):
+                                        lazy_names.add(element.value)
                 elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
                     available.add(node.target.id)
                 elif isinstance(node, (ast.Import, ast.ImportFrom)):
                     for alias in node.names:
                         available.add(alias.asname or alias.name.split(".")[0])
+            # PEP 562 懒加载：模块用 __getattr__ 按需 import 子模块时，
+            # 只要名字出现在 __all__ / _SUBMODULES 里就算"真实可用"。
+            # （core/safety/__init__.py 必须这样写才能切断
+            #   formats ↔ safety 的 import 环，见其 docstring。）
+            if has_getattr:
+                available |= lazy_names
             for symbol in symbols:
                 if symbol not in available:
                     self.error("F-05",

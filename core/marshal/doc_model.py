@@ -92,12 +92,28 @@ def _parse_fixnum(buf, pos):
 
 
 def _fixnum_to_bytes_std(v):
-    """Standard Ruby Marshal fixnum encoding (XP/VX, Ruby 1.8/1.9 stock)."""
+    """标准 Ruby Marshal fixnum 编码（XP/VX，stock Ruby 1.8/1.9）。
+
+    ⚠ 2026-09-12 M2a 修复 **B-10 的第二处**：原实现写 ``1 <= v <= 122``
+    一律用单字节（``v + 5``），但**单字节的可表示范围实际只到 117**：
+
+    * 解析侧 ``_parse_fixnum_std`` 把 ``0x7B`` 当作"长格式标记"；
+    * 编码侧若对 122 输出 ``122 + 5 = 127 = 0x7B``，
+      解析侧就会去读后面 4 个字节 —— **恰好把 118..122 这五个值解成垃圾，
+      并让后续流错位**。
+
+    合成 VX/XP 样本测试（tests/compat/test_standard_mode.py）正是抓到了
+    这一点：``struct.error: unpack requires a buffer of 4 bytes``。
+
+    修正后：单字节只覆盖 ``1..117`` 与 ``-117..-1``（即 ``0x06..0x7A`` 与
+    ``0x81..0xFA``），其余一律走长格式 ``0x7B`` + 大端 int32。
+    这样编码侧输出的任何字节，解析侧都能正确还原（见同文件的往返测试）。
+    """
     if v == 0:
         return b'\x05'
-    if 1 <= v <= 122:
+    if 1 <= v <= 117:
         return bytes([v + 5])
-    if -122 <= v <= -1:
+    if -117 <= v <= -1:
         return bytes([(v - 5) & 0xFF])
     return b'\x7b' + struct.pack('>i', v)
 
@@ -131,7 +147,55 @@ class Node:
         raise NotImplementedError
 
     def to_py(self):
-        raise NotImplementedError
+        """转成 Python 内建结构。
+
+        ⚠ 2026-09-12 M2a 修复 **B-11**：原先有 10 个类未实现本方法，而
+        ``Array.to_py`` / ``Hash.to_py`` 会递归调用子节点 —— 对真实 RPG 数据
+        （Array 里几乎必然套着 ObjectNode）调用 ``to_py()`` 必然抛
+        ``NotImplementedError``。现已全部实现，约定见 :meth:`HashDef.to_py`。
+        """
+        raise NotImplementedError(
+            "%s 未实现 to_py()（这是缺陷，请按 HashDef.to_py 的约定补上）"
+            % type(self).__name__)
+
+
+# ---------------------------------------------------------------------------
+# to_py() 辅助：符号名 / 实例变量名的统一解码
+# ---------------------------------------------------------------------------
+def _sym_name(node):
+    """从 Symbol / SymLink 节点取名字（bytes 按 utf-8 容错解码）。"""
+    if node is None:
+        return None
+    name = getattr(node, 'name', None)
+    if isinstance(name, bytes):
+        return name.decode('utf-8', 'replace')
+    if name is not None:
+        return str(name)
+    index = getattr(node, 'index', None)
+    if index is not None:
+        return "symbol#%d" % index
+    return None
+
+
+def _ivar_name(node):
+    """实例变量名统一带 ``@`` 前缀（与 Ruby 源码写法一致，便于人工核对）。"""
+    name = _sym_name(node)
+    if name and not name.startswith('@'):
+        return '@' + name
+    return name
+
+
+def _sym_or_key(node):
+    """字典键：符号转成普通字符串，其余走 to_py()。
+
+    注意不能直接用 ``Node.to_py``：Fixnum 会变成 int、String 会变成 str，
+    作为 dict 键都可以用，但会丢失"这是符号"的信息；而 RPG 数据的
+    Hash 键绝大多数是 Fixnum（道具 id）。因此这里对 Symbol 取名字，
+    其余一律 ``to_py()`` 后直接当键。
+    """
+    if isinstance(node, (Symbol, SymLink)):
+        return _sym_name(node)
+    return node.to_py()
 
 
 class NilNode(Node):
@@ -346,6 +410,25 @@ class HashDef(Node):
         out += self.default.serialize()
         return bytes(out)
 
+    def to_py(self):
+        """带默认值的 Hash。
+
+        ⚠ 2026-09-12 M2a 修复 **B-11**：本方法（连同下面 9 个类）原先未实现，
+        基类会抛 ``NotImplementedError``；而 ``Array.to_py`` / ``Hash.to_py``
+        会**递归**调用子节点的 ``to_py`` —— 因此对真实 RPG 数据（Array 里套
+        ObjectNode）调用 ``to_py()`` 必然抛异常。``core/formats/rgss_save.py``
+        当初就是因为这个自己另写了一套遍历（见其 ``_children``）。
+
+        返回值约定（M2a 统一）：能无损对应 Python 内建类型的就返回内建类型；
+        Ruby 独有结构返回**带标记的 dict**，标记键统一为 ``"__ruby__"``。
+        这样 ``to_py()`` 既能当通用遍历入口用，也不会丢失类型信息。
+        """
+        return {
+            "__ruby__": "HashDef",
+            "entries": {_sym_or_key(k): v.to_py() for k, v in self.entries},
+            "default": self.default.to_py(),
+        }
+
 
 class Struct(Node):
     __slots__ = ('classsym', 'members')
@@ -364,6 +447,13 @@ class Struct(Node):
             out += v.serialize()
         return bytes(out)
 
+    def to_py(self):
+        return {
+            "__ruby__": "Struct",
+            "class": _sym_name(self.classsym),
+            "members": {_sym_or_key(k): v.to_py() for k, v in self.members},
+        }
+
 
 class Userdef(Node):
     __slots__ = ('classsym', 'data')
@@ -379,6 +469,14 @@ class Userdef(Node):
         return b'\x75' + self.classsym.serialize() + \
             _fixnum_to_bytes(len(self.data)) + self.data
 
+    def to_py(self):
+        return {
+            "__ruby__": "UserDef",
+            "class": _sym_name(self.classsym),
+            # 不透明字节：保留原文，调用方需要时自行解码
+            "data": self.data,
+        }
+
 
 class Usermarshal(Node):
     __slots__ = ('classsym', 'inner')
@@ -390,6 +488,13 @@ class Usermarshal(Node):
 
     def write_self(self):
         return b'\x55' + self.classsym.serialize() + self.inner.serialize()
+
+    def to_py(self):
+        return {
+            "__ruby__": "UserMarshal",
+            "class": _sym_name(self.classsym),
+            "value": self.inner.to_py(),
+        }
 
 
 class UsermarshalRaw(Node):
@@ -407,6 +512,13 @@ class UsermarshalRaw(Node):
     def write_self(self):
         return b'\x55' + self.classsym.serialize() + \
             _fixnum_to_bytes_std(len(self.data)) + self.data
+
+    def to_py(self):
+        return {
+            "__ruby__": "UserMarshalRaw",
+            "class": _sym_name(self.classsym),
+            "data": self.data,
+        }
 
 
 class ObjectNode(Node):
@@ -426,6 +538,19 @@ class ObjectNode(Node):
             out += v.serialize()
         return bytes(out)
 
+    def to_py(self):
+        """任意 Ruby 对象 → 带标记的 dict。
+
+        这是修复 B-11 的**关键**一项：真实 RPG 数据里 Array/Hash 里几乎总是
+        套着 ObjectNode，只要它没实现 ``to_py``，整个 ``to_py()`` 链就不可用。
+        实例变量名统一带 ``@`` 前缀（与 Ruby 源码一致），便于人工核对。
+        """
+        return {
+            "__ruby__": "Object",
+            "class": _sym_name(self.classsym),
+            "ivars": {_ivar_name(k): v.to_py() for k, v in self.ivars},
+        }
+
 
 class Ivar(Node):
     __slots__ = ('inner', 'ivars')
@@ -444,6 +569,19 @@ class Ivar(Node):
             out += v.serialize()
         return bytes(out)
 
+    def to_py(self):
+        """``I`` 前缀：语义上是"给内层值额外挂实例变量"。
+
+        对 RPG 数据最常见的用途是字符串的编码标记（``E`` / ``encoding``），
+        因此这里**优先返回内层值本身**，把附加属性放在带标记的 dict 里
+        —— 这样 ``to_py()`` 的结果对调用方最有用（直接拿到文本）。
+        """
+        return {
+            "__ruby__": "Ivar",
+            "value": self.inner.to_py(),
+            "ivars": {_ivar_name(k): v.to_py() for k, v in self.ivars},
+        }
+
 
 class Regexp(Node):
     __slots__ = ('value', 'options')
@@ -454,6 +592,17 @@ class Regexp(Node):
         self.options = options
         self.raw = b'\x2f' + _fixnum_to_bytes(len(value)) + value + \
             _fixnum_to_bytes(options)
+
+    def write_self(self):
+        return b'\x2f' + _fixnum_to_bytes(len(self.value)) + self.value + \
+            _fixnum_to_bytes(self.options)
+
+    def to_py(self):
+        return {
+            "__ruby__": "Regexp",
+            "source": self.value.decode('utf-8', 'replace'),
+            "options": self.options,
+        }
 
     def write_self(self):
         return b'\x2f' + _fixnum_to_bytes(len(self.value)) + self.value + \
@@ -471,6 +620,9 @@ class ClassNode(Node):
     def write_self(self):
         return b'\x63' + _fixnum_to_bytes(len(self.name)) + self.name
 
+    def to_py(self):
+        return {"__ruby__": "Class", "name": self.name.decode('utf-8', 'replace')}
+
 
 class ModuleNode(Node):
     __slots__ = ('name',)
@@ -482,6 +634,9 @@ class ModuleNode(Node):
 
     def write_self(self):
         return b'\x6d' + _fixnum_to_bytes(len(self.name)) + self.name
+
+    def to_py(self):
+        return {"__ruby__": "Module", "name": self.name.decode('utf-8', 'replace')}
 
 
 class Parser:
@@ -501,6 +656,18 @@ class Parser:
         return node
 
     def _fixnum(self):
+        """读一个定长整数。
+
+        ⚠ 2026-09-12 M2a 修复 **B-10**：本方法原先在本类中**定义两次** ——
+        第一版尊重 ``self.standard``，第二版（在本方法之后定义）无条件走变体
+        编码器并覆盖了第一版。后果是 ``standard=True``（XP/VX 的活路径，
+        见 core/engines.py 的 ``standard`` 字段）**按变体解析、按标准写回**，
+        回写字节漂移（例如 0 会被写成 0x05）。
+
+        现在只保留尊重 ``self.standard`` 的这一版，并对齐写侧
+        （``Fixnum.write_self`` 同样按 ``self.standard`` 选择编码器）。
+        回归测试：tests/compat/test_m2a_regressions.py::TestB10FixnumStandard。
+        """
         if self.standard:
             v, self.pos = _parse_fixnum_std(self.buf, self.pos)
         else:
@@ -516,10 +683,6 @@ class Parser:
         b = self.buf[self.pos:self.pos + n]
         self.pos += n
         return b
-
-    def _fixnum(self):
-        v, self.pos = _parse_fixnum(self.buf, self.pos)
-        return v
 
     def _register(self, node):
         self.objects.append(node)

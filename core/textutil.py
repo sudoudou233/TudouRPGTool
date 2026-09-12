@@ -9,9 +9,10 @@ Helpers for splitting RPG Maker text into translatable chunks.
 @tested   tests/unit/test_textutil.py
 @footprint docs/MODULES.md#coretextutil
 @note     vendored：来自 rpgmaker_translation_tool/tool/textutil.py。
-@note     已知问题见 docs/M0-现状测绘.md section 3.5：原注释声称支持
-@note     \{ \} \^ \| \. \! \> \< \$ 这些符号型转义，但 CONTROL_RE
-@note     要求反斜杠后必须是字母，因此它们从不被匹配（M2a 处置）。
+@note     M2a 修复 N-08：原 CONTROL_RE 只匹配"反斜杠 + 字母"与换行，
+@note     注释里声称支持的 \{ \} \^ \| \. \! \> \< \$ 从不被匹配。
+@note     现已补齐符号型转义分支，并用 tests/compat/test_m2a_regressions.py
+@note     的 TestN08SymbolEscapes 锁定。
 @note     原 translate_segments() 是全仓零调用的死代码，未搬入。
 """
 
@@ -19,9 +20,31 @@ from __future__ import annotations
 
 import re
 
-# RPG Maker MV/MZ/VX-Ace style escape codes: \V[1], \N[name], \C[2],
-# \I[icon], \{ \} \^ \| \. \! \> \< \$ \G, plus literal line breaks.
-CONTROL_RE = re.compile(r"\\[A-Za-z]{1,3}(?:\[[^\]\r\n]*\])?|\r\n|\n|\\\\")
+# RPG Maker MV/MZ/VX Ace 的控制码。四类，必须**全部**匹配，
+# 否则控制码会被当成普通文本送去翻译，译文回来时游戏变量/图标/换行就坏了。
+#
+#   1. `\` + 1~3 个字母 + 可选 `[...]` 参数：\V[1] \N[name] \C[2] \I[3] \G
+#   2. `\` + 一个符号型转义：\{ \} \^ \| \. \! \> \< \$ \\
+#      （2026-09-12 M2a 修复 N-08：原正则要求 `\` 后必须是字母，因此这一整类
+#       从不被匹配 —— 注释写着支持、实现却没有，属于"注释与实现不符"。
+#       `\\` 也归入本分支，语义与原来一致。）
+#   3. CRLF
+#   4. LF
+#
+# 注意字符类里 `-` 放在末尾、`]` 紧跟 `^` 之后，避免被当成区间或提前闭合。
+CONTROL_RE = re.compile(
+    # 1) 字母型：\V[1] \N[name] \C[2] \I[3] \G
+    #    限 {1,2} 且**不允许带方括号参数**：RPG Maker 的控制码字母最多 2 个
+    #    （V/N/C/I/P/PI/PX/PY/NC/NW/NE/FS…），而 \G 这类单字母码后面
+    #    直接跟正文。原实现写 {1,3} 且无参数约束，会把 `\G你好` 里的
+    #    `\G你` 当成一个控制码吃掉（M2a 实测发现），因此收紧。
+    r"\\[A-Za-z]{1,2}(?!\[)"                  # 不接 [ 的字母型
+    r"|\\[A-Za-z]{1,2}\[[^\]\r\n]*\]"         # 接 [参数] 的字母型
+    r"|\\\\"                                  # 2) 字面双反斜杠（须排在符号型之前）
+    r"|\\[{}^|.!><$]"                         # 3) 符号型：\{ \} \^ \| \. \! \> \< \$
+    r"|\r\n"                                  # 4) CRLF
+    r"|\n"                                    # 5) LF
+)
 
 
 def split_text(text):

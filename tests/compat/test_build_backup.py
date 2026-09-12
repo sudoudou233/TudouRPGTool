@@ -39,7 +39,9 @@ while not os.path.isfile(os.path.join(_ROOT, "app.py")):
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from core.safety import atomic, backup as build  # noqa: E402
+from core.safety import atomic  # noqa: E402
+from core.safety import backup as backup_mod  # noqa: E402
+from core.safety import builder as build  # noqa: E402
 
 
 class TestTargetDir(unittest.TestCase):
@@ -77,24 +79,21 @@ class TestTargetDir(unittest.TestCase):
 
     def test_safe_target_rejects_drive_root(self):
         with self.assertRaises(ValueError):
-            build._assert_safe_target("D:\\")
+            atomic.assert_safe_target("D:\\")
 
     def test_safe_target_accepts_normal_dir(self):
         target = os.path.join(self.tmp.name, "ok")
-        # 注意：vendored 的 build._assert_safe_target 成功时返回 None（只做校验），
-        # 而 core.safety.atomic.assert_safe_target 返回规范化路径。
-        # 两者是"校验器"与"规范化+校验器"的区别，M2b 收敛时会统一。
-        self.assertIsNone(build._assert_safe_target(target))
-        self.assertEqual(
-            os.path.abspath(atomic.assert_safe_target(target)),
-            os.path.abspath(target))
+        # M2a 后只剩一个实现：core.safety.atomic.assert_safe_target
+        # 返回规范化后的绝对路径（旧的 vendored 版本"成功返回 None"已删除）。
+        self.assertEqual(os.path.abspath(atomic.assert_safe_target(target)),
+                         os.path.abspath(target))
 
-    def test_two_safety_checkers_agree_on_rejection(self):
-        """两个实现都必须拒绝同一个危险目标（防止收敛前行为分叉）。"""
+    def test_safety_checker_rejects_dangerous_targets(self):
+        """唯一的护栏实现必须拒绝危险目标。"""
         for dangerous in ("D:\\", os.path.expanduser("~")):
             with self.subTest(target=dangerous):
                 with self.assertRaises(ValueError):
-                    build._assert_safe_target(dangerous)
+                    atomic.assert_safe_target(dangerous)
                 with self.assertRaises(atomic.SafeTargetError):
                     atomic.assert_safe_target(dangerous)
 
@@ -111,7 +110,7 @@ class TestCopyTree(unittest.TestCase):
 
     def test_copies_everything_byte_exact(self):
         dst = os.path.join(self.tmp.name, "dst")
-        build._copy_tree(self.src, dst)
+        build.copy_tree(self.src, dst)
         for rel in ("a.txt", "sub/b.bin"):
             with open(os.path.join(self.src, rel.replace("/", os.sep)), "rb") as f:
                 original = f.read()
@@ -122,7 +121,7 @@ class TestCopyTree(unittest.TestCase):
         """进度回调签名为 ``progress_cb(done, total)``（原实现 :47-48）。"""
         dst = os.path.join(self.tmp.name, "dst")
         seen = []
-        build._copy_tree(self.src, dst,
+        build.copy_tree(self.src, dst,
                          progress_cb=lambda done, total: seen.append((done, total)))
         self.assertTrue(seen, "复制过程应回调进度")
         self.assertEqual(seen[-1][0], seen[-1][1],
@@ -144,7 +143,7 @@ class TestBackupRestore(unittest.TestCase):
             f.write('{"original": true}')
 
     def test_backup_creates_manifest_and_copy(self):
-        backup_dir, copied = build.backup_files(self.game, [self.rel])
+        backup_dir, copied = backup_mod.backup_files(self.game, [self.rel])
         self.assertTrue(os.path.isdir(backup_dir))
         manifest = os.path.join(backup_dir, "manifest.json")
         self.assertTrue(os.path.isfile(manifest))
@@ -156,21 +155,23 @@ class TestBackupRestore(unittest.TestCase):
         self.assertTrue(os.path.isfile(copied))
 
     def test_backup_dir_name_has_expected_prefix(self):
-        backup_dir, copied = build.backup_files(self.game, [self.rel])
-        self.assertTrue(os.path.basename(backup_dir).startswith(build.BACKUP_PREFIX))
+        backup_dir, copied = backup_mod.backup_files(self.game, [self.rel])
+        self.assertTrue(os.path.basename(backup_dir).startswith(backup_mod.BACKUP_PREFIX))
 
     def test_restore_brings_content_back(self):
-        backup_dir, copied = build.backup_files(self.game, [self.rel])
+        backup_dir, copied = backup_mod.backup_files(self.game, [self.rel])
         with open(self.target, "w", encoding="utf-8") as f:
             f.write('{"translated": true}')
-        count = build.restore_backup(self.game, backup_dir)
-        self.assertGreaterEqual(count, 1)
+        # M2a 后 restore_backup 返回结构化结果（restored/removed/safety_backup）
+        result = backup_mod.restore_backup(self.game, backup_dir)
+        self.assertGreaterEqual(result["restored"], 1)
+        self.assertIn("safety_backup", result)
         with open(self.target, encoding="utf-8") as f:
             self.assertIn("original", f.read())
 
     def test_list_backups_finds_created_backup(self):
-        backup_dir, copied = build.backup_files(self.game, [self.rel])
-        listed = build.list_backups(self.game)
+        backup_dir, copied = backup_mod.backup_files(self.game, [self.rel])
+        listed = backup_mod.list_backups(self.game)
         names = [item["name"] if isinstance(item, dict) else str(item)
                  for item in listed]
         self.assertTrue(any(os.path.basename(backup_dir) in str(n) for n in names),
@@ -178,7 +179,7 @@ class TestBackupRestore(unittest.TestCase):
 
     def test_missing_file_is_skipped_not_crashed(self):
         """备份清单里含不存在的文件时应跳过（原实现 :284-285 的行为）。"""
-        backup_dir, copied = build.backup_files(
+        backup_dir, copied = backup_mod.backup_files(
             self.game, [self.rel, "does/not/exist.json"])
         import json
         with open(os.path.join(backup_dir, "manifest.json"), encoding="utf-8") as f:

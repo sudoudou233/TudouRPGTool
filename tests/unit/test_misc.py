@@ -254,15 +254,15 @@ class TestTextutil(unittest.TestCase):
         self.assertEqual(segments, [])
         self.assertEqual(textutil.rebuild([text], slices, []), [text])
 
-    def test_known_gap_symbol_escapes_not_matched(self):
-        """**记录已知缺口**（M0 §3.5）：符号型转义 \\{ \\} \\^ 等不被匹配。
+    def test_symbol_escapes_matched_after_m2a_fix(self):
+        """N-08 已修（M2a）：符号型转义现在被正确识别。
 
-        这条测试固化"当前行为"而不是"期望行为"，这样 M2a 修好之后
-        本测试会失败并提醒我们更新文档与断言。
+        原先这条固化的是"已知缺口"；修复后翻转为"必须匹配"。
         """
         parts = textutil.split_text("a\\{b\\}c")
         controls = [seg for is_plain, seg in parts if not is_plain]
-        self.assertEqual(controls, [], "符号型转义当前不被识别（已知缺口）")
+        self.assertEqual(controls, ["\\{", "\\}"],
+                         "N-08 修复后符号型转义必须被识别为控制码")
 
     def test_empty_input(self):
         self.assertEqual(textutil.split_text(""), [])

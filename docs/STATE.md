@@ -7,9 +7,10 @@
 
 ## 1. 一句话状态
 
-**M1 骨架与足迹已完成**：唯一入口可启动、两个功能模块按契约自动发现并注册、
-足迹系统全套产出且校验通过（退出码 0）、420 个测试全绿。
-**下一步：M2a 可信测试基线 + P0 缺陷修复。**
+**M2a 可信基线与 P0 修复已完成**：5 个 P0 + 4 个 P1 缺陷全部修复并配回归断言，
+合成 VX/XP 样本补齐了 `standard=True` 活路径的覆盖（过程中又抓出 2 个新缺陷），
+临时脚本已清理。458 个测试全绿，足迹校验与启动自检通过。
+**下一步：M2b core 收敛（marshal 与 formats 各收敛为一份）。**
 
 ---
 
@@ -18,8 +19,8 @@
 | 里程碑 | 状态 | 完成判据 | 实测结果 |
 | --- | --- | --- | --- |
 | M0 现状测绘 | ✅ 完成 | 每条功能都有"原位置 → 新位置"映射 | `docs/M0-现状测绘.md`、`docs/迁移对照表.md`（99 条映射） |
-| **M1 骨架与足迹** | ✅ **完成** | 空壳可启动，足迹校验通过 | `python app.py --check` 退出码 0；`python tools/check_footprint.py` 退出码 0（40 文件、2 功能、0 错误） |
-| M2a 可信基线 + P0 修复 | ⬜ 未开始 | 测试可一键跑且退出码可信；5 个 P0 缺陷有回归断言 | — |
+| M1 骨架与足迹 | ✅ 完成 | 空壳可启动，足迹校验通过 | `python app.py --check` 退出码 0；足迹校验 0 错误 |
+| **M2a 可信基线 + P0 修复** | ✅ **完成** | 测试可一键跑且退出码可信；P0 缺陷有回归断言 | 458 例 0 失败；5 个 P0 + 4 个 P1 已修；合成 VX/XP 样本覆盖 B-10 活路径 |
 | M2b core 收敛 | ⬜ 未开始 | 重复实现清零；两份 marshal 断言同时通过 | — |
 | M3a 翻译功能接入 | ⬜ 未开始 | 扫描→翻译→生成汉化版→还原 全链路走通 | — |
 | M3b 修改功能接入 | ⬜ 未开始 | 5 类存档读写改回读在界面走通 | — |
@@ -35,7 +36,7 @@
 
 | 功能 id | 用户可见名 | 界面入口 | 后端入口 | 核心实现文件 |
 | --- | --- | --- | --- | --- |
-| `translate` | 文本翻译 | `ui/web/pages/translate.js` | `features/translate/manifest.py` → `register(ctx)` | `core/formats/mv_mz_data.py`、`core/formats/rgss_data.py`、`core/safety/backup.py`、`features/translate/translators.py` |
+| `translate` | 文本翻译 | `ui/web/pages/translate.js` | `features/translate/manifest.py` → `register(ctx)` | `core/formats/mv_mz_data.py`、`core/formats/rgss_data.py`、`core/safety/builder.py`、`core/safety/backup.py`、`features/translate/translators.py` |
 | `cheats` | 存档修改 | `ui/web/pages/cheats.js` | `features/cheats/manifest.py` → `register(ctx)` | `core/engines.py`、`core/formats/mv_save.py`、`core/formats/rgss_save.py`、`core/marshal/` |
 
 **跨功能的公共地基**（改这些会影响所有功能，务必先读 `docs/MODULES.md`）：
@@ -44,7 +45,9 @@
 | --- | --- | --- |
 | `core/engines.py` | 引擎识别 + 数据/存档目录发现 | 两个功能都依赖；改它会同时影响翻译扫描与存档修改 |
 | `core/registry.py` + `core/context.py` | 功能发现与装配契约 | 改它影响所有功能的注册方式 |
-| `core/safety/atomic.py` | **唯一的写盘手段**（原子写 + 备份） | 改它影响所有写回路径的数据安全 |
+| `core/safety/atomic.py` | **唯一的写盘手段**（原子写 + 备份 + 护栏） | 改它影响所有写回路径的数据安全 |
+| `core/safety/backup.py` | 备份 / 还原 / 清单（**不依赖 formats**） | 改它影响所有写回的还原能力 |
+| `core/safety/builder.py` | 生成汉化版与字体应用的编排层（暂存换名 + 失败回滚） | 改它影响"生成汉化版"整条链路 |
 | `core/jobs.py` | 后台任务队列 | 改它影响所有长任务的进度/取消 |
 | `ui/server.py` + `ui/web/dom.js` | HTTP 层与前端共享工具 | 改它影响所有页面 |
 
@@ -104,19 +107,20 @@ RPG Maker 全能工具 v2.0.0-dev  (Python 3.10.9)
 
 ---
 
-## 5. 已知缺陷台账（M2a 的主要输入）
+## 5. 已知缺陷台账
 
-> 完整 29 条见 `docs/M0-现状测绘.md` §4。这里只列**必须最先处理**的。
+> 完整 29 条见 `docs/M0-现状测绘.md` §4。
+> **M2a 已修完所有 P0 与关键 P1**（下表 ✅ 条目均有回归断言）。
 
-### P0（阻断级：会丢功能或损坏用户文件）
+### P0（阻断级：会丢功能或损坏用户文件）—— **全部已修**
 
-| 编号 | 位置 | 问题 | 计划 |
+| 编号 | 位置 | 问题 | M2a 处置 |
 | --- | --- | --- | --- |
-| **B-01** | `core/safety/backup.py`（原 `build.py:366`） | 生成汉化版时目标目录已存在会先 `shutil.rmtree` 再拷贝；中间失败旧输出不可恢复 | M2a：改为"先拷到临时目录再原子换名" |
-| **B-02** | `core/formats/rgss_data.py`、`core/formats/mv_mz_data.py` | 游戏数据写回**非原子**（`open("wb")` 直接截断） | M2a：全部改走 `core/safety/atomic.py` |
-| **B-03** | `core/safety/backup.py`（原 `build.py:155-161`） | 字体兜底会**覆盖** `gamefont.ttf` / `mplus-1m-regular.ttf`，而这两个路径不在备份清单里 → **无法还原** | M2a：加入 touched 清单 |
-| **B-10** | `core/marshal/doc_model.py` | `Parser._fixnum` **重复定义**（后一处覆盖前一处）→ `standard=True`（XP/VX 活路径）**按变体解析、按标准写回**，字节漂移 | M2a：先修再做 M2b 收敛 |
-| **B-11** | `core/marshal/doc_model.py` | `to_py()` 有 10 个类未实现，而 `Array`/`Hash` 会递归调用 → 对真实数据调用即抛 | M2b：补齐或改由门面层承担 |
+| **B-01** ✅ | `core/safety/builder.py` | 覆盖已有输出目录时先 `rmtree` 再拷贝，中途失败旧输出永久丢失 | 改为**暂存目录 + 原子换名**：先拷到 `<dst>.__staging_*`，成功后把旧目录移开 → 换名 → 删旧；失败只清理暂存。回归：`test_old_output_survives_when_copy_fails` |
+| **B-02** ✅ | `core/formats/{mv_mz_data,rgss_data}.py`、`core/safety/{builder,backup}.py` | 游戏数据/存档写回**非原子**（`open("wb")` 直接截断） | 全部改走 `core/safety/atomic.py`。回归：AST 扫描"禁止写模式 open" + 写入失败原文件字节不变 |
+| **B-03** ✅ | `core/safety/builder.py` | 字体兜底覆盖 `gamefont.ttf` / `mplus-1m-regular.ttf`，但这两个路径不在备份清单里 → 无法还原 | `font_touched_paths()` 无条件登记这两个路径；回归：`test_fallback_overwrite_can_be_restored` 走真实 build+restore |
+| **B-10** ✅ | `core/marshal/doc_model.py` | `Parser._fixnum` **重复定义**（后一处覆盖前一处）→ XP/VX 按变体解析、按标准写回，字节漂移 | 删除重复定义，只留尊重 `self.standard` 的一版。**另发现并修复第二处**：标准编码 `_fixnum_to_bytes_std` 把单字节上限写成 122，而 `0x7B` 是长格式标记 → 118..122 会错位，正确上限是 **117**。回归：`tests/compat/test_standard_mode.py` |
+| **B-11** ✅ | `core/marshal/doc_model.py` | `to_py()` 有 10 个类未实现，而 `Array`/`Hash` 会递归调用 → 真实数据调用即抛 | 补齐全部 10 个类（`HashDef`/`Struct`/`Userdef`/`Usermarshal`/`UsermarshalRaw`/`ObjectNode`/`Ivar`/`Regexp`/`ClassNode`/`ModuleNode`），统一约定：内建类型直返，Ruby 独有结构返回带 `"__ruby__"` 标记的 dict |
 
 ### P1（必修）
 
@@ -143,49 +147,72 @@ RPG Maker 全能工具 v2.0.0-dev  (Python 3.10.9)
 | **N-04** | `core/registry.py` | 功能发现用 `pkgutil.iter_modules` 的 `ispkg` 过滤，会**静默跳过**缺 `__init__.py` 的功能目录（最该报错的情形）。已修：直接列目录逐个判定并报错 | ✅ M1 已修 + 有测试 |
 | **N-05** | `core/context.py` | 未命名路由默认用 `handler.__name__`，一堆 lambda 会得到同名 `<lambda>` → 误报"路由名重复" | ✅ M1 已修 + 有测试 |
 | **N-06** | `core/jobs.py` | **终态竞态**：先写 `status="error"` 再写 `traceback`，轮询方会读到"已失败但没有 traceback"的半成品 | ✅ M1 已修：新增 `Job.finalize()` 在锁内一次性发布终态 |
-| **N-07** | `core/formats/rgss_data.py` | 多值条目的写回路径（`.../parameters/0/0`）在 RGSS 侧不被支持：`_navigate` 会走 `int(seg)` 抛 `ValueError` 被静默跳过 → 译文落不下去 | ⬜ **M2a 处置**（已加防御性注释，不会写坏文件） |
-| **N-08** | `core/textutil.py` | 注释声称支持 `\{ \} \^ \| \. \! \> \< \$`，但 `CONTROL_RE` 要求反斜杠后必须是字母 → 这些符号型转义**从不被匹配** | ⬜ **M2a 处置**（已有固化了当前行为的测试，修好时该测试会失败以提醒更新） |
+| **N-07** | `core/formats/rgss_data.py` | 多值条目的写回路径（`.../parameters/0/0`）在 RGSS 侧不被支持 → 译文落不下去 | ✅ **M2a 已修**：`_navigate`/`_set_value` 重写为 `_step`/`_index`/`_rmobject_key`，支持"列表里的列表"与非前缀 ivar 键；非整数段抛明确的 `KeyError` |
+| **N-08** | `core/textutil.py` | 注释声称支持符号型转义，但 `CONTROL_RE` 要求反斜杠后必须是字母 → 从不被匹配 | ✅ **M2a 已修**：补齐符号型分支并收紧字母型（`{1,2}` + 不允许 `[` 紧跟，修掉 `\G你好` 被读成 `\G你` 的问题） |
+
+### M2a 期间**新发现**的问题
+
+| 编号 | 位置 | 问题 | 状态 |
+| --- | --- | --- | --- |
+| **N-09** | `core/formats/rgss_save.py` | `read_actors` / `set_actor_attr` / `set_actor_skills` 写死 `[v for k,v in actors_node.ivars][0]`，假设容器是**对象**（`Game_Actors`）。但 stock XP/VX 存档里它是**数组** → `AttributeError: 'Array' object has no attribute 'ivars'`，整条 RGSS 存档读写不可用 | ✅ **M2a 已修**：新增 `_as_array()` 归一化两种形态（对象取 `@data`，数组直接用）。**由合成 VX/XP 样本暴露** |
+| **N-10** | `core/marshal/doc_model.py` | 标准编码 `_fixnum_to_bytes_std` 把单字节上限写成 122，但 `0x7B` 是长格式标记 → **118..122 这五个值编码后被解析成垃圾并使后续流错位**（B-10 的第二处，与重复定义相互独立） | ✅ **M2a 已修**：上限改为 117（即 `0x06..0x7A`）。由合成样本的往返断言暴露（`struct.error: unpack requires a buffer of 4 bytes`） |
+| **N-11** | `core/safety/__init__.py` ↔ `core/formats/__init__.py` | 拆分 safety 层时出现**循环 import**：`formats.__init__ → mv_mz_data → safety.__init__ → builder → formats.mv_mz_data` | ✅ **M2a 已修**：`core/safety/__init__.py` 改用 PEP 562 `__getattr__` 懒加载子模块（并让 `check_footprint` 的 F-05 认可这种写法） |
 
 ---
 
 ## 6. 当前测试状态
 
 ```powershell
-python tests/run_all.py                      # 420 例，0 失败 0 错误（含真实样本）
+python tests/run_all.py                      # 458 例，0 失败 0 错误（含真实样本）
 python tests/run_all.py --quiet              # 退出码 0
-python tools/check_footprint.py --quiet      # 退出码 0
+python tools/check_footprint.py --quiet      # 退出码 0（37 文件 / 2 功能）
 python app.py --check                        # 退出码 0
 ```
 
 | 测试层 | 用例数 | 说明 |
 | --- | --- | --- |
 | `unit/` | ~300 | 纯单元，零外部依赖 |
-| `compat/` | ~48 | 原两个工具断言的可迁移版本（含 **300 个真实 `.rvdata2` 零漂移**） |
+| `compat/` | ~96 | 原两个工具断言的可迁移版本 + **M2a 缺陷回归** + **合成 VX/XP 样本** |
 | `features/` | ~30 | 两个功能模块的自有测试 |
 | `integration/` | ~30 | 启动服务后的端到端链路 + 零第三方依赖扫描 + Python 3.8 语法扫描 |
 | `local/` | 0（待补） | 真实样本层，靠 `TUDOU_RPGTOOL_SAMPLES` 指定；样本不入库 |
 
-**注意**：`tests/compat/test_marshal_compat.py::TestMarshalRoundtripRealSamples`
-在未设置 `TUDOU_RPGTOOL_SAMPLES` 时会 skip（不是失败）。要拿到"300 文件零漂移"
-的完整证据，必须设该环境变量。
+**真实样本覆盖**（设 `TUDOU_RPGTOOL_SAMPLES` 后）：
+
+* **300 个真实 `.rvdata2` 字节级往返零漂移**（`test_marshal_compat.py`）
+* 7 个真实游戏上与两个旧引擎识别实现判定 100% 一致
+
+**⚠ 未设置环境变量时**，`test_marshal_compat.py::TestMarshalRoundtripRealSamples`
+会 skip 而非失败。
+
+**合成样本覆盖**（`tests/compat/test_standard_mode.py`，任何机器都能跑）：
+本机没有 VX（`.rvdata`）与纯 XP（`.rxdata`）游戏，因此用代码生成最小存档，
+覆盖 `standard=True`（XP/VX 的活路径）。**这套合成样本一加上就抓出了 N-09 与 N-10**，
+证明"没有样本 = 没有证据"。
 
 ---
 
-## 7. 下一步（M2a）任务清单
+## 7. 下一步（M2b）任务清单
 
-按优先级：
+M2a 已把前置条件清干净（P0 全修、测试基线可信、VX/XP 样本补齐）。M2b 按 **ADR-004** 执行：
 
-1. **修 5 个 P0**：B-01、B-02、B-03、B-10、B-11。每个都要配"能复现缺陷"的回归断言
-   （先写断言看到它失败，再修到通过）。
-2. **处置 N-07、N-08**：多值条目写回路径 + 控制码正则注释不符。
-3. **决定 VX（`.rvdata`）覆盖方式**：本机**没有 VX 游戏样本**，而 VX 正是 B-10 的
-   活路径。要么合成 VX 样本（用 `marshal` 造最小 `.rvdata`），要么在
-   `docs/ROADMAP.md` 登记为"已知未验证边界"。
-4. **把 P0/P1 修复逐条写入 `docs/DECISIONS.md`**（修 / 保留并登记 / 明确不做，三选一，不许沉默）。
-5. **清理临时脚本**：`tools/_m1_*.py`（3 个）在 M2a 结束后删除，同时从
-   `docs/footprint.json` 移除。
-6. **考虑引入审查者**（需求 §2）：M2b 与 M4 是最值得互审的两个节点，
-   审查记录写入 `docs/reviews/REVIEW-YYYYMMDD-<主题>.md`。
+1. **`core/marshal/` 收敛为一份**：以 `doc_model` 为二进制层主体，`value_model`
+   降为对象门面（`loads_py` / `dumps_py`）。必需移植项见 ADR-004（四个 type code 的
+   读写对称、编码视图旁挂、对象门面 API、bignum 不得降为裸 int）。
+   **验收**：`CONVERGENCE_STATUS == "merged"`，且
+   `tests/compat/test_marshal_compat.py` 的 300 文件零漂移与
+   `tests/compat/test_standard_mode.py` 的合成样本同时通过。
+2. **抽出 `core/formats/jsoncodec.py`**（JSON + LZString + zlib + 加密包装），
+   让游戏数据路径与存档路径共用一份实现。验收：一个实现两条路径共用，两侧测试全绿。
+3. **消除 `core/_refbridge.py`**：把 12 项对照用途逐条转为工程内断言（引擎识别一致性
+   与标准模式往返已在 `test_engines.py` 与 `test_standard_mode.py` 里），
+   然后整文件删除，`reference_status()['pending'] == 0`。
+4. **统一两个 safety 护栏**：现在只剩 `core/safety/atomic.assert_safe_target` 一份
+   （旧的 vendored `_assert_safe_target` 已随 `backup.py` 重写删除），确认无残留。
+5. **去重测试**：`tests/unit/test_misc.py` 里的 `TestConfig`/`TestConstants`
+   与 `test_config.py` 重复导出（当前无害，但计数翻倍）。
+6. **建议引入审查者**（需求 §2）：M2b 是最值得互审的节点（"重复实现是否真清零 +
+   字节无损"）。审查记录写入 `docs/reviews/REVIEW-YYYYMMDD-<主题>.md`。
 
 ---
 
@@ -194,9 +221,15 @@ python app.py --check                        # 退出码 0
 | 临时状态 | 消除时机 | 验收判据 |
 | --- | --- | --- |
 | `core/marshal/` 有**两份实现**（`doc_model` + `value_model`） | M2b | 两侧 roundtrip 断言同时通过；重复实现清零 |
-| `core/_refbridge.py` 桥接层（12 项登记） | M2b 后整文件删除 | `reference_status()['pending'] == 0` |
+| `core/_refbridge.py` 桥接层（14 项登记） | M2b 后整文件删除 | `reference_status()['pending'] == 0` |
 | `core/formats/` 未抽出共享 `jsoncodec.py`（MV/MZ 游戏数据与存档各写一套 JSON/压缩约定） | M2b | 一个实现两条路径共用 |
 | `features/translate/translators.py`、`session.py` 是 vendored 代码 | M3a | 接线为正式模块并接入 UI |
 | 两个功能页都是**骨架**（`status: skeleton`） | M3a / M3b | 两条回归链路在界面走通 |
-| `tools/_m1_fix_future_imports.py`、`_m1_fix_test_root.py`、`_m1_sync_tested.py` | M2a | 删除并从 footprint.json 移除 |
-| `tests/unit/test_misc.py` 里的 `TestConfig`/`TestConstants` 与 `test_config.py` 重复导出 | M2a | 去重（当前无害：每个用例只执行一次） |
+| `tests/unit/test_misc.py` 里的 `TestConfig`/`TestConstants` 与 `test_config.py` 重复导出 | M2b | 去重（当前无害：每个用例只执行一次） |
+
+**M2a 已清掉的临时状态**（留档）：
+
+* ~~`core/safety/backup.py` 是 vendored 的 `build.py`（399 行，五个职责挤一起）~~
+  → 已拆为 `atomic` / `backup` / `builder` / `fontutil` 四个模块（ADR-011）
+* ~~`tools/_m1_fix_future_imports.py`、`_m1_fix_test_root.py`、`_m1_sync_tested.py`、
+  `_m1_patch_features.py`~~ → 已删除，`footprint.json` 已刷新（40 → 37 文件）

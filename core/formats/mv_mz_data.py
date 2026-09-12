@@ -18,6 +18,7 @@ import json
 import os
 import base64
 
+from ..safety.atomic import atomic_write_text
 from ..textutil import has_real_text
 
 
@@ -76,16 +77,26 @@ def _load_data_file(full, fname):
 
 
 def _save_data_file(full, fname, data, wrapped, header):
+    """写回 JSON 数据文件。
+
+    ⚠ 2026-09-12 M2a 修复 **B-02**：原实现直接 ``open(full, "w")`` 截断重写，
+    写一半被中断就留下**半写的 JSON**，游戏直接读不了档。现改为走
+    :mod:`core.safety.atomic`（临时文件 + fsync + ``os.replace``），
+    任何失败都不会破坏原文件。
+
+    ``atomic_write_text`` 默认把 ``\\r\\n`` 规范化为 ``\\n``，与原实现的
+    ``newline="\\n"`` 行为一致（原实现的刻意选择：数据文件不需要 CRLF）。
+    """
     if wrapped:
         header = header or {"uid": "", "bid": ""}
         plain = json.dumps(data, ensure_ascii=False, indent=2)
         payload = {"uid": header["uid"], "bid": header["bid"],
                    "data": _encrypt_wrapped(plain, fname)}
-        with open(full, "w", encoding="utf-8", newline="\n") as f:
-            json.dump(payload, f, ensure_ascii=False)
+        # 保留原行为：wrapped 分支的 uid/bid/加密 data 都是 ASCII，
+        # 用默认 ensure_ascii=True 输出（与原 json.dump 调用一致）
+        atomic_write_text(full, json.dumps(payload))
         return
-    with open(full, "w", encoding="utf-8", newline="\n") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    atomic_write_text(full, json.dumps(data, ensure_ascii=False, indent=2))
 
 # Event command codes whose parameters contain player-visible text.
 # value = (parameter index, category)

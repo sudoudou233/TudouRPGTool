@@ -131,15 +131,30 @@ class TestSegmentsRoundtrip(unittest.TestCase):
         segments, _slices = textutil.collect_segments([text])
         self.assertEqual(segments, ["：", " 已获得", "！"])
 
-    def test_known_gap_symbol_escapes_not_matched(self):
-        """固化**已知缺口**（M0 §3.5）：符号型转义 ``\\{`` ``\\}`` 等不被匹配。
+    def test_symbol_escapes_now_matched(self):
+        """N-08 已修（M2a）：符号型转义 ``\\{`` ``\\}`` 等现在被正确识别。
 
-        这条断言记录的是"当前行为"而非"期望行为"。M2a 修好之后本用例会失败，
-        从而强制我们同步更新文档与这里的断言（有意为之）。
+        这条测试原先固化的是"已知缺口"（当时正则不匹配它们）。
+        M2a 补齐正则后，断言随之翻转为"必须匹配" —— 这正是当初写
+        "固化当前行为"的目的：修复时它会失败，强制我们同步更新文档与断言。
         """
-        parts = textutil.split_text("a\\{b\\}c")
-        self.assertEqual([s for p, s in parts if not p], [],
-                         "符号型转义当前不被识别（已知缺口，M2a 处置）")
+        # 注意 "\\G" 在 Python 字面量里是「反斜杠 + G」；而 "\\{" 等也同理。
+        # 这里显式用 chr(92) 拼接，避免读者误以为 \\G 是换行转义。
+        backslash = chr(92)
+        for code in ("{", "}", "^", "|", ".", "!", ">", "<", "$"):
+            with self.subTest(code=code):
+                token = backslash + code
+                parts = textutil.split_text("a" + token + "b")
+                controls = [seg for is_plain, seg in parts if not is_plain]
+                self.assertIn(token, controls,
+                              "%r 应被识别为控制码（N-08 修复后）" % token)
+        # \G 是字母型控制码（货币单位），单独断言。
+        # 注意用分隔符而不是紧接英文字母：`\Gb` 会被字母型分支读成 `\Gb`
+        # （\G 后面恰好跟英文字母时无法区分控制码与正文，这是 RPG Maker
+        #  文本本身固有的歧义；真实用法里 \G 后面跟的是标点或中文）。
+        parts = textutil.split_text("共" + backslash + "G 100")
+        controls = [seg for is_plain, seg in parts if not is_plain]
+        self.assertIn(backslash + "G", controls, r"\G 应被识别为控制码")
 
 
 if __name__ == "__main__":

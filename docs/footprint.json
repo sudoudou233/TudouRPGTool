@@ -288,7 +288,7 @@
       "footprint": "docs/MODULES.md#coreformats",
       "vendored": true,
       "note": "vendored：来自 rpgmaker_translation_tool/tool/mv_mz.py。 M2b 抽出 core/formats/jsoncodec.py 后本文件只保留业务规则。",
-      "lines": 367
+      "lines": 378
     },
     "core/formats/mv_save.py": {
       "feature": "cheats",
@@ -323,7 +323,7 @@
       "footprint": "docs/MODULES.md#coreformats",
       "vendored": true,
       "note": "vendored：来自 rpgmaker_translation_tool/tool/vxace.py。 已知缺陷 B-02（非原子写）、B-13（original 参数未用于校验）。",
-      "lines": 303
+      "lines": 388
     },
     "core/formats/rgss_save.py": {
       "feature": "cheats",
@@ -341,7 +341,7 @@
       "footprint": "docs/MODULES.md#coreformats",
       "vendored": true,
       "note": "vendored：来自 rpgmaker_cheating_tool/rpgdata.py。",
-      "lines": 465
+      "lines": 517
     },
     "core/jobs.py": {
       "feature": "none",
@@ -394,7 +394,7 @@
       "footprint": "docs/MODULES.md#coremarshal",
       "vendored": true,
       "note": "vendored：来自 rpgmaker_cheating_tool/rmarshal.py（原样搬入）。 已知缺陷 B-10（Parser._fixnum 重复定义，XP/VX 写回漂移） 在 M2a 修复；M2b 收敛后本文件删除。",
-      "lines": 712
+      "lines": 875
     },
     "core/marshal/value_model.py": {
       "feature": "none",
@@ -468,16 +468,18 @@
       "public": [
         "atomic",
         "backup",
+        "builder",
         "fontutil"
       ],
       "depends": [
         "core.paths",
+        "core.formats",
         "core.marshal.value_model"
       ],
-      "tested": "tests/unit/test_atomic.py",
+      "tested": "tests/unit/test_atomic.py, tests/compat/test_build_backup.py",
       "footprint": "docs/MODULES.md#coresafety",
       "vendored": false,
-      "lines": 28
+      "lines": 58
     },
     "core/safety/atomic.py": {
       "feature": "none",
@@ -500,25 +502,38 @@
       "feature": "translate",
       "layer": "core",
       "public": [
-        "build",
+        "BACKUP_PREFIX",
         "backup_files",
         "restore_backup",
-        "list_backups",
-        "apply_font",
-        "default_target_dir",
-        "resolve_target_dir",
-        "next_free_dir",
-        "BACKUP_PREFIX"
+        "list_backups"
       ],
       "depends": [
-        "core.marshal.value_model",
+        "core.paths",
+        "core.safety.atomic"
+      ],
+      "tested": "tests/compat/test_build_backup.py, tests/compat/test_m2a_regressions.py",
+      "footprint": "docs/MODULES.md#coresafety",
+      "vendored": false,
+      "lines": 296
+    },
+    "core/safety/builder.py": {
+      "feature": "translate",
+      "layer": "core",
+      "public": [
+        "build",
+        "apply_font",
+        "default_target_dir",
+        "resolve_target_dir"
+      ],
+      "depends": [
+        "core.safety.backup",
+        "core.safety.atomic",
         "core.safety.fontutil"
       ],
-      "tested": "tests/compat/test_build_backup.py",
+      "tested": "tests/compat/test_build_backup.py, tests/compat/test_m2a_regressions.py",
       "footprint": "docs/MODULES.md#coresafety",
-      "vendored": true,
-      "note": "vendored：来自 rpgmaker_translation_tool/tool/build.py。 已知缺陷（M2a 必修）：B-01（rmtree 先删后拷）、B-03（字体兜底 覆盖不可还原）、B-04（还原不完整）、B-05（覆盖无二次确认）、 B-06（无回滚）、B-26（模块顶层 import winreg，非 Windows 失败）。",
-      "lines": 413
+      "vendored": false,
+      "lines": 579
     },
     "core/safety/fontutil.py": {
       "feature": "translate",
@@ -552,8 +567,8 @@
       "tested": "tests/unit/test_textutil.py",
       "footprint": "docs/MODULES.md#coretextutil",
       "vendored": true,
-      "note": "vendored：来自 rpgmaker_translation_tool/tool/textutil.py。 已知问题见 docs/M0-现状测绘.md section 3.5：原注释声称支持 \\{ \\} \\^ \\| \\. \\! \\> \\< \\$ 这些符号型转义，但 CONTROL_RE 要求反斜杠后必须是字母，因此它们从不被匹配（M2a 处置）。 原 translate_segments() 是全仓零调用的死代码，未搬入。",
-      "lines": 121
+      "note": "vendored：来自 rpgmaker_translation_tool/tool/textutil.py。 M2a 修复 N-08：原 CONTROL_RE 只匹配\"反斜杠 + 字母\"与换行， 注释里声称支持的 \\{ \\} \\^ \\| \\. \\! \\> \\< \\$ 从不被匹配。 现已补齐符号型转义分支，并用 tests/compat/test_m2a_regressions.py 的 TestN08SymbolEscapes 锁定。 原 translate_segments() 是全仓零调用的死代码，未搬入。",
+      "lines": 144
     },
     "features/__init__.py": {
       "feature": "none",
@@ -678,72 +693,6 @@
       "note": "vendored：来自 rpgmaker_translation_tool/tool/translators.py。 M3a 接线时改为按功能模块暴露 register(ctx)。",
       "lines": 473
     },
-    "tools/_m1_fix_future_imports.py": {
-      "feature": "none",
-      "layer": "tools",
-      "public": [
-        "PLAN",
-        "main"
-      ],
-      "depends": [
-        "(stdlib only)"
-      ],
-      "tested": "(一次性脚本)",
-      "footprint": "docs/DEVLOG.md",
-      "vendored": true,
-      "note": "前一版 tools/_m1_patch_vendored.py 把足迹头当作\"第二个字符串表达式\"",
-      "lines": 301
-    },
-    "tools/_m1_fix_test_root.py": {
-      "feature": "none",
-      "layer": "tools",
-      "public": [
-        "PATTERN",
-        "PATTERN4",
-        "REPLACEMENT",
-        "main"
-      ],
-      "depends": [
-        "(stdlib only)"
-      ],
-      "tested": "(一次性脚本)",
-      "footprint": "docs/DEVLOG.md",
-      "vendored": false,
-      "note": "原写法用固定层数 ``dirname(dirname(dirname(__file__)))`` 推工程根，",
-      "lines": 66
-    },
-    "tools/_m1_patch_features.py": {
-      "feature": "none",
-      "layer": "tools",
-      "public": [
-        "PLAN",
-        "main"
-      ],
-      "depends": [
-        "(stdlib only)"
-      ],
-      "tested": "(一次性脚本)",
-      "footprint": "docs/DEVLOG.md",
-      "vendored": false,
-      "note": "M1 先只做静态可导入性保障；真正的功能接线在 M3a。",
-      "lines": 157
-    },
-    "tools/_m1_sync_tested.py": {
-      "feature": "none",
-      "layer": "tools",
-      "public": [
-        "MAPPING",
-        "main"
-      ],
-      "depends": [
-        "(stdlib only)"
-      ],
-      "tested": "(一次性脚本)",
-      "footprint": "docs/DEVLOG.md",
-      "vendored": false,
-      "note": "M1 收尾用。check_footprint 的 F-08 会校验 @tested 指向的路径必须",
-      "lines": 110
-    },
     "tools/check_footprint.py": {
       "feature": "none",
       "layer": "tools",
@@ -759,7 +708,7 @@
       "tested": "tests/unit/test_check_footprint.py",
       "footprint": "docs/DEVLOG.md",
       "vendored": false,
-      "lines": 571
+      "lines": 588
     },
     "tools/gen_footprint.py": {
       "feature": "none",

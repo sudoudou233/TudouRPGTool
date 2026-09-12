@@ -1,7 +1,7 @@
 # AGENTS.md —— 给下一个 AI 的开工指令
 
 > 本文件是**接手本工程的第一入口**。读完本文件 + `docs/STATE.md`，你就能开始工作。
-> 最后更新：M1 完成时。
+> 最后更新：**M2a 完成时**。
 
 ---
 
@@ -48,6 +48,10 @@
    同一测试文件里有静态检查。
 3. **任何写回前必须备份，且可还原** —— 一律走 `core/safety/atomic.py`
    与 `core/safety/backup.py`，**禁止**页面上或功能里直接 `open(path, "wb")`。
+   这条由 `tests/compat/test_m2a_regressions.py` 用 **AST 扫描**强制
+   （查真正的写模式 `open` 调用；不能用字符串匹配 —— 文档字符串里会描述原实现）。
+   违规的也是 `core/safety/builder.py` 的 `confirm_overwrite`：覆盖原游戏/已有输出
+   必须显式确认，否则抛 `OverwriteNotConfirmed`。
 4. **未修改的内容字节级原样保留** —— 由 roundtrip 测试强制
    （`tests/compat/test_marshal_compat.py`，300 个真实样本零漂移）。
 5. **破坏性操作二次确认** —— 覆盖原游戏 / 写回原存档 / 还原备份 / 删输出目录。
@@ -71,7 +75,10 @@ TudouRPGTool/
 │  ├─ config.py paths.py textutil.py
 │  ├─ marshal/             # Ruby Marshal（doc_model + value_model，M2b 收敛为一份）
 │  ├─ formats/             # mv_mz_data / rgss_data / mv_save / rgss_save / lzstring
-│  └─ safety/              # atomic（原子写）/ backup（备份还原）/ fontutil
+│  └─ safety/              # atomic（原子写）/ backup（备份还原）/
+│                          # builder（生成汉化版编排）/ fontutil（字体）
+│                          # ⚠ 依赖方向单向：atomic ← backup ← builder → fontutil
+│                          #   backup **不得** import core.formats（会形成 import 环）
 ├─ features/               # 一个目录 = 一个可插拔功能模块
 │  ├─ translate/
 │  └─ cheats/
@@ -166,13 +173,18 @@ python tests/run_all.py --suite compat
 `M0 现状测绘`（✅）→ `M1 骨架与足迹`（✅）→ `M2a 可信基线 + P0 修复`
 → `M2b core 收敛` → `M3a 翻译接入` → `M3b 修改接入` → `M4 UI 统一` → `M5 验收硬化`
 
-**M1 结束时仍存在的临时状态**（下一个 AI 必须知道）：
+**M2a 结束时仍存在的临时状态**（下一个 AI 必须知道）：
 
 * `core/marshal/` 里**有两份实现**（`doc_model` 与 `value_model`）——临时状态，
-  M2b 收敛为一份。验收硬指标：两侧 roundtrip 断言同时通过。
-* `core/_refbridge.py` 是**临时桥接层**，用于在 M2a/M2b 期间加载参考实现做对照。
+  M2b 收敛为一份（方向见 **ADR-004**）。验收硬指标：两侧 roundtrip 断言同时通过。
+* `core/_refbridge.py` 是**临时桥接层**（14 项登记），用于加载参考实现做对照。
   收敛完成后整个文件删除。
+* `core/formats/` 尚未抽出共享的 `jsoncodec.py`（MV/MZ 游戏数据与存档各写一套
+  JSON / 压缩约定）——M2b 收敛。
 * `features/translate/translators.py` 与 `session.py` 是 vendored 代码，
-  M3a 接线为正式模块。
-* 多处已知缺陷（P0/P1）**尚未修**，逐条列在 `docs/STATE.md` 与
-  `docs/M0-现状测绘.md` §4。**不要在没读那份台账的情况下改这些文件。**
+  M3a 接线为正式模块；两个功能页仍是骨架（`status: skeleton`）。
+
+**P0/P1 缺陷已在 M2a 全部修完**（B-01/02/03/04/05/06/07/10/11/26 + N-07/08），
+每条都有回归断言在 `tests/compat/test_m2a_regressions.py`。
+**改 `core/safety/builder.py` 或 `core/marshal/` 之前必须先读 `docs/STATE.md` §5** ——
+那里记录了每个缺陷的位置与修法，改坏会立刻让回归测试红灯。

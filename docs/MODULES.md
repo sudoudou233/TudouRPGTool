@@ -140,18 +140,30 @@
 **M2b 目标**：抽出 `jsoncodec.py`（JSON + LZString + zlib + 加密包装），
 让游戏数据与存档两条路径共用一份编解码实现。
 
-### core/safety/
+### core/safety/（M2a 拆为四个模块，依赖方向单向）
 
 | 文件 | 职责 | 公开 API | 谁调用 |
 | --- | --- | --- | --- |
-| `atomic.py` | **唯一的写盘手段**：原子写 + 备份 + 目标护栏 | `atomic_write_bytes()`、`atomic_write_text()`、`sibling_backup()`、`assert_safe_target()`、`next_free_dir()`、`unique_temp_path()`、`AtomicWriteError`、`SafeTargetError` | M3a/M3b 接线时由功能调用；已被 `tests/unit/test_atomic.py` 覆盖 |
-| `backup.py` | 生成汉化版、备份/还原、字体注入（vendored，待收敛） | `build()`、`backup_files()`、`restore_backup()`、`list_backups()`、`apply_font()`、`default_target_dir()`、`resolve_target_dir()`、`next_free_dir()`、`BACKUP_PREFIX`、`_copy_tree()`、`_assert_safe_target()`、`_patch_core_js()`、`_inject_font_script()`、`_install_user_font()` | `features/translate/manifest.py`（M3a 接线） |
-| `fontutil.py` | 字体族名解析（ttf/otf/ttc） | `extract_family()`、`safe_filename()` | `core/safety/backup.py` |
+| `atomic.py` | **唯一的写盘手段**：原子写 + 备份文件 + 目标护栏 | `atomic_write_bytes()`、`atomic_write_text()`、`sibling_backup()`、`assert_safe_target()`、`next_free_dir()`、`unique_temp_path()`、`AtomicWriteError`、`SafeTargetError` | 所有需要写文件的模块 |
+| `backup.py` | 备份 / 还原 / 清单（**不 import `core.formats`** —— 这是切断 import 环的关键） | `backup_files()`、`restore_backup()`、`list_backups()`、`safety_backup()`、`write_manifest()`、`read_manifest()`、`record_created()`、`BACKUP_PREFIX`、`MANIFEST_NAME` | `builder.py`、M3a/M3b 接线 |
+| `builder.py` | **生成汉化版的编排层**：暂存换名（B-01）、字体应用（B-03）、失败回滚（B-06）、覆盖确认（B-05） | `build()`、`apply_font()`、`copy_tree()`、`default_target_dir()`、`resolve_target_dir()`、`font_touched_paths()`、`patch_core_js()`、`inject_font_script()`、`install_user_font()`、`OverwriteNotConfirmed`、`BuildFailed`、`FONT_FALLBACK_NAMES` | `features/translate/manifest.py`（M3a 接线） |
+| `fontutil.py` | 字体族名解析（ttf/otf/ttc） | `extract_family()`、`safe_filename()` | `builder.py` |
 
-**⚠ `backup.py` 是当前**最危险**的文件**：含 5 个 P0/P1 缺陷
-（B-01 先 rmtree 后拷贝、B-03 字体兜底不可还原、B-04 还原不完整、
-B-05 覆盖无二次确认、B-06 无回滚、B-26 顶层 `import winreg`）。
-**改它之前必须先读 `docs/STATE.md` §5。**
+**依赖方向（务必保持）**：
+
+```
+atomic  ←  backup  ←  builder  →  fontutil
+                       ↓
+                 core.formats
+```
+
+`backup.py` **不得** import `core.formats`：一旦引入就会形成
+`formats.__init__ → mv_mz_data → safety.__init__ → builder → formats` 的环（ADR-011）。
+`core/safety/__init__.py` 用 PEP 562 `__getattr__` 懒加载子模块来打破该环。
+
+**⚠ 改 `builder.py` 之前必须先读** `docs/STATE.md` §5 的 P0 清单 ——
+这个文件承载了 5 个已修的数据安全缺陷，每一条都有回归断言
+（`tests/compat/test_m2a_regressions.py`），改坏会立刻红灯。
 
 ---
 

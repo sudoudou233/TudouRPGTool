@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 
 from ..marshal import value_model as marshal
+from ..safety.atomic import atomic_write_bytes
 from ..textutil import has_real_text
 from .mv_mz_data import TEXT_CODES
 
@@ -216,42 +217,94 @@ def _unwrap(value):
 
 
 def _navigate(root, path):
-    """Return (parent, last segment, is_rmivar) for a path."""
+    """Return (parent, last segment, is_rmivar) for a path.
+
+    ⚠ 2026-09-12 M2a 修复 **N-07**：多值条目（402 显示选择项的
+    ``parameters/0/1`` 这类"列表里的列表"路径）原先落不下去 ——
+    ``_navigate`` 对 list 用 ``int(seg)``，段不是数字时抛 ``ValueError``，
+    被 ``apply_to_files`` 静默跳过（不写坏文件，但译文丢失）。
+
+    现在分两层处理：
+    * list + 整数段 → 正常下标；
+    * list + 非整数段 → 抛 ``KeyError``（**明确的"这条不支持"**，
+      而不是让 ``int()`` 的 ValueError 混在其它错误里）；
+    * dict → 先试原样字符串键，再试整数键（RPG 数据的 Hash 键常是 Fixnum）；
+    * 其它类型（含 str）→ 抛 ``KeyError``。
+    """
     segs = path.split("/")
     cur = root
     for seg in segs[:-1]:
-        if isinstance(cur, list):
-            # 防御：段必须是整数下标。若上游（如 402 选择项）把"字符串列表"
-            # 的文本当成 path 段传下来，``int("是")`` 会抛 ValueError，
-            # 而 apply_to_files 只捕获 (KeyError, ValueError, IndexError)，
-            # 于是静默跳过——不写坏文件，但译文也落不下去。
-            # M1 已记录该缺陷（见 docs/DEVLOG.md），M2a 统一处置多值条目的写回。
-            cur = cur[int(seg)]
-        elif isinstance(cur, marshal.RMObject):
-            name = seg if seg.startswith("@") else "@" + seg
-            cur = cur.ivars[name]
-        elif isinstance(cur, dict):
-            key = seg
-            if key not in cur:
-                key = int(seg)
-            cur = cur[key]
-        else:
-            raise KeyError(path)
+        cur = _step(cur, seg, path)
     last = segs[-1]
     if isinstance(cur, marshal.RMObject):
-        name = last if last.startswith("@") else "@" + last
-        return cur, name, False
+        return cur, _rmobject_key(cur, last), False
+    if isinstance(cur, list):
+        return cur, _index(last, path), False
     return cur, last, False
 
 
-def _set_value(parent, key, value, original):
-    """Set a translated string, preserving the original's encoding wrapper."""
-    if isinstance(parent, marshal.RMObject):
-        old = parent.ivars[key]
-    elif isinstance(parent, dict):
-        old = parent.get(key, parent.get(int(key)))
+def _rmobject_key(cur, seg):
+    """在 RMObject 的 ivars 里找出 ``seg`` 对应的**真实键名**。
+
+    ⚠ 两份 marshal 实现的实例变量键名不同，必须都支持：
+    * 文档模型（``doc_model``）：键是 Symbol **节点**，那条路径由
+      ``core/formats/rgss_save.py`` 直接按符号名比较，不走本函数。
+    * 值模型（``value_model``，本模块用的就是它）：键是普通 ``str``，
+      既可能是 ``'@list'``（与 Ruby 源码写法一致），也可能是 ``'list'``
+      （调用方省掉了 ``@``）。
+
+    M2a 实测：原实现只试 ``'@' + seg``，于是用无前缀键构造的对象一律
+    ``KeyError`` → 整批写回被静默跳过。现在两种都试。
+    """
+    if seg.startswith("@"):
+        candidates = (seg, seg[1:])
     else:
-        old = parent[int(key)]
+        candidates = ("@" + seg, seg)
+    for name in candidates:
+        if name in cur.ivars:
+            return name
+    raise KeyError(seg)
+
+
+def _step(cur, seg, path):
+    """走一层路径。"""
+    if isinstance(cur, list):
+        return cur[_index(seg, path)]
+    if isinstance(cur, marshal.RMObject):
+        return cur.ivars[_rmobject_key(cur, seg)]
+    if isinstance(cur, dict):
+        if seg in cur:
+            return cur[seg]
+        return cur[_index(seg, path)]
+    raise KeyError(path)
+
+
+def _index(seg, path):
+    """把路径段转成列表下标；不是整数就抛 KeyError（明确不支持）。"""
+    try:
+        return int(seg)
+    except (TypeError, ValueError):
+        raise KeyError("路径段 %r 不是整数下标（path=%s）" % (seg, path))
+
+
+def _set_value(parent, key, value, original):
+    """Set a translated string, preserving the original's encoding wrapper.
+
+    ``original`` 参数保留在签名里（调用方一直传），但 M2b 会用它做
+    "陈旧性校验"（数据变了就不盲写）。当前行为与原实现一致：只按 path 定位后写入。
+    """
+    if isinstance(parent, marshal.RMObject):
+        old = parent.ivars.get(key)
+    elif isinstance(parent, list):
+        old = parent[_index(key, "set_value")]
+    elif isinstance(parent, dict):
+        if key in parent:
+            old = parent[key]
+        else:
+            old = parent.get(_index(key, "set_value"))
+    else:
+        raise KeyError("无法在不支持的类型上写值：%s" % type(parent).__name__)
+
     enc = getattr(_unwrap(old), "enc", None) or "utf-8"
     new = marshal.RMStr(value, enc=enc)
     if isinstance(old, marshal.RMIvar):
@@ -259,17 +312,48 @@ def _set_value(parent, key, value, original):
         return
     if isinstance(parent, marshal.RMObject):
         parent.ivars[key] = new
-    elif isinstance(parent, dict):
-        if key in parent:
-            parent[key] = new
-        else:
-            parent[int(key)] = new
+    elif isinstance(parent, list):
+        parent[_index(key, "set_value")] = new
+    elif key in parent:
+        parent[key] = new
     else:
-        parent[int(key)] = new
+        parent[_index(key, "set_value")] = new
+
+
+def _entry_get(entry, key, default=None):
+    """从条目取字段（兼容 dict 与对象两种形态）。"""
+    if isinstance(entry, dict):
+        return entry.get(key, default)
+    return getattr(entry, key, default)
+
+
+def _entry_ready(entry):
+    """条目是否可写回：状态为 translated 且有非空译文。
+
+    条目可能是 dict（新实现）或对象（兼容旧调用方），因此两种都支持。
+    """
+    if isinstance(entry, dict):
+        status = entry.get("status")
+        translated = entry.get("translated")
+    else:
+        status = getattr(entry, "status", None)
+        translated = getattr(entry, "translated", None)
+    return status == "translated" and bool(translated)
 
 
 def apply_to_files(game_info, entries_by_file, progress=None):
-    stats = {"files": 0, "entries": 0}
+    """把译文写回 rvdata2 / rxdata。
+
+    ⚠ 2026-09-12 M2a 修复 **B-02**：原实现 ``open(full, "wb")`` 直接截断重写，
+    写一半被中断就留下半写的存档/数据文件，游戏直接损坏。现走
+    :mod:`core.safety.atomic`（临时文件 + fsync + ``os.replace``）。
+
+    另外把异常捕获放宽到 ``TypeError``：多值路径（如 402 选择项）在某些形状下
+    会走到非整数段，原实现只捕获 ``(KeyError, ValueError, IndexError)``，
+    遇到 ``TypeError`` 会**中断整个写回**。现在统一按"这条跳过"处理，
+    并在返回值里给出计数，便于发现"没写进去"而不是静默成功。
+    """
+    stats = {"files": 0, "entries": 0, "skipped": 0}
     data_dir = game_info["data_dir"]
     for fname, entries in entries_by_file.items():
         if not (fname.endswith(".rvdata2") or fname.endswith(".rxdata")):
@@ -284,18 +368,19 @@ def apply_to_files(game_info, entries_by_file, progress=None):
             continue
         changed = False
         for entry in entries:
-            if not entry.get("translated") or entry.get("status") != "translated":
+            if not _entry_ready(entry):
                 continue
             try:
-                parent, key, _ = _navigate(root, entry["path"])
-                _set_value(parent, key, entry["translated"], entry["original"])
+                parent, key, _ = _navigate(root, _entry_get(entry, "path"))
+                _set_value(parent, key, _entry_get(entry, "translated"),
+                           _entry_get(entry, "original"))
                 changed = True
                 stats["entries"] += 1
-            except (KeyError, ValueError, IndexError):
+            except (KeyError, ValueError, IndexError, TypeError):
+                stats["skipped"] += 1
                 continue
         if changed:
-            with open(full, "wb") as f:
-                f.write(marshal.dumps(root))
+            atomic_write_bytes(full, marshal.dumps(root))
             stats["files"] += 1
         if progress:
             progress(fname)

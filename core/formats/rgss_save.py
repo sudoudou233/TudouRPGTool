@@ -177,6 +177,39 @@ def find_top_hash(node):
     return None
 
 
+def _as_array(node):
+    """把一个"角色容器"节点归一化成 :class:`rmarshal.Array`。
+
+    两种真实形态都要支持（见 ``read_actors`` 的 N-09 说明）：
+
+    * ``ObjectNode``（``Game_Actors``，改造版 VX Ace 常见）：取它的第一个
+      实例变量值（``@data``），若是数组就用它；
+    * ``Array``（stock XP/VX）：直接就是数组。
+
+    返回 ``None`` 表示两种都不是（调用方按"读不到"处理，不抛异常）。
+    """
+    if isinstance(node, rmarshal.Array):
+        return node
+    ivars = getattr(node, 'ivars', None)
+    if not ivars:
+        return None
+    for _key, value in ivars:
+        if isinstance(value, rmarshal.Array):
+            return value
+    return None
+
+
+def _read_var_array(container):
+    """从 ``Game_Switches`` / ``Game_Variables`` 节点里取出 ``@data`` 数组。"""
+    if isinstance(container, rmarshal.Array):
+        return container
+    ivars = getattr(container, 'ivars', None) or []
+    for _key, value in ivars:
+        if isinstance(value, rmarshal.Array):
+            return value
+    return None
+
+
 class SaveFile:
     """RGSS save file editor.
 
@@ -270,10 +303,27 @@ class SaveFile:
         return {_intval(k): _intval(v) for k, v in h.entries}
 
     def read_actors(self, stream_index=0):
+        """读角色数组。
+
+        ⚠ 2026-09-12 M2a 修复 **N-09**：原实现写死
+        ``arr = [v for k, v in actors_node.ivars][0]``，即假设
+        ``contents[4]`` 是 **对象**（``Game_Actors``，内部 ``@data`` 才是数组）。
+        但 stock XP/VX 存档里 ``contents[4]`` 直接就是**数组**
+        （``ObjectNode.ivars`` 不存在）→ ``AttributeError: 'Array' object has
+        no attribute 'ivars'``。
+
+        这个缺陷原先一直没被发现，因为本机**没有 XP/VX 样本**，而
+        ``test_all_saves.py`` 跑的是改造版 VX Ace（``hash`` 布局 + 对象形态）。
+        是 M2a 新加的合成 VX/XP 样本把它暴露出来的。
+
+        现在两种形态都支持：对象取第一个 ivar（``@data``），数组直接用。
+        """
         actors_node = self._actors(self.streams[stream_index][1])
         if actors_node is None:
             return []
-        arr = [v for k, v in actors_node.ivars][0]
+        arr = _as_array(actors_node)
+        if arr is None:
+            return []
         result = []
         p = self.streams[stream_index][1]._parser
         for i, a in enumerate(arr.items):
@@ -403,8 +453,9 @@ class SaveFile:
             actors_node = self._actors(sn)
             if actors_node is None:
                 continue
-            arr = [v for k, v in actors_node.ivars][0]
-            if actor_id >= len(arr.items):
+            # N-09：容器可能是对象（Game_Actors）也可能是数组（stock XP/VX）
+            arr = _as_array(actors_node)
+            if arr is None or actor_id >= len(arr.items):
                 continue
             a = arr.items[actor_id]
             if a is None or isinstance(a, rmarshal.NilNode):
@@ -438,8 +489,9 @@ class SaveFile:
             actors_node = self._actors(sn)
             if actors_node is None:
                 continue
-            arr = [v for k, v in actors_node.ivars][0]
-            if actor_id >= len(arr.items):
+            # N-09：容器可能是对象（Game_Actors）也可能是数组（stock XP/VX）
+            arr = _as_array(actors_node)
+            if arr is None or actor_id >= len(arr.items):
                 continue
             a = arr.items[actor_id]
             if a is None or isinstance(a, rmarshal.NilNode):

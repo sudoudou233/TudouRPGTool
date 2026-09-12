@@ -337,6 +337,8 @@ M1 写测试时发现：若先写 `self.status = "error"` 再写 `self.traceback
 
 ---
 
+---
+
 ## ADR-010 ｜ 死代码与未使用 API 一律不迁移，并显式登记
 
 * **日期**：2026-09-12
@@ -366,3 +368,173 @@ M1 写测试时发现：若先写 `self.status = "error"` 再写 `self.traceback
 
 `docs/M0-现状测绘.md` §3.5 与 `docs/迁移对照表.md` §D 记录全部处置；
 `docs/UI_SPEC.md` §2 列出"已删除的旧样式（禁止复活）"。
+
+---
+
+## ADR-011 ｜ 安全层拆成四个模块，`core/safety/__init__.py` 用 PEP 562 懒加载
+
+* **日期**：2026-09-12（M2a）
+* **状态**：已采纳
+
+### 背景
+
+`core/safety/backup.py` 原先是 vendored 的 `translation_tool/tool/build.py`（399 行），
+里面挤了五件事：备份/还原/清单、生成汉化版编排、字体注入、目标目录命名、平台相关
+（`winreg`）。M2a 要修 B-01（暂存换名）、B-03（字体兜底可还原）、B-04（还原完整性）、
+B-06（失败回滚）、B-07（备份失败不静默）、B-26（顶层 `winreg`）—— 在一个 399 行的
+混合文件里改动风险过高。
+
+### 决策
+
+拆成四个模块，**依赖方向单向**：
+
+```
+atomic   （原子写 + 备份文件 + 目标护栏）          无内部依赖
+   ▲
+backup   （备份 / 还原 / 清单）                   只依赖 atomic，**不 import core.formats**
+   ▲
+builder  （生成汉化版 + 字体应用编排）             依赖 backup/atomic/fontutil + core.formats
+fontutil （字体族名解析）                          无内部依赖
+```
+
+拆分时立刻撞上**循环 import**：
+
+```
+core.formats.__init__ → mv_mz_data → core.safety.atomic
+                                     → core.safety.__init__ → builder
+                                     → core.formats.mv_mz_data   ✗
+```
+
+### 解法
+
+`core/safety/__init__.py` 改用 **PEP 562 `__getattr__` 懒加载**：
+
+```python
+_SUBMODULES = ("atomic", "fontutil", "backup", "builder")
+
+def __getattr__(name):
+    if name in _SUBMODULES:
+        module = importlib.import_module("." + name, __name__)
+        globals()[name] = module
+        return module
+    raise AttributeError(...)
+```
+
+于是 `from core.safety.atomic import X` 只触发 `atomic` 子模块，环被切断；
+`core.safety.builder` 这类访问才按需 import。
+
+`tools/check_footprint.py` 的 **F-05** 相应放宽：模块定义了 `__getattr__` 且名字出现在
+`__all__` / `_SUBMODULES` 里时，视为"真实可用"（否则会把合规的懒加载误报为幽灵符号）。
+
+### 备选方案与代价
+
+| 方案 | 代价 |
+| --- | --- |
+| 把 formats 的 import 挪到函数内部 | 每次写回都重新 import；且"用得到才 import"的隐式依赖更难审查 |
+| 让 `backup.py` 继续持有 formats 依赖 | 职责继续混杂，B-01/B-06 的改动面仍然铺开 |
+| 拆分但不懒加载，靠人工保证 import 顺序 | 脆弱：任何一次 `from core.formats import X` 都会重新引入环 |
+
+### 后果
+
+* 每个模块可以单独测试（`test_atomic.py` / `test_build_backup.py` / `test_m2a_regressions.py`）。
+* `backup.py` 不再依赖任何 formats 模块，因此可以被存档修改功能复用。
+* 新增一条纪律：**`core/safety/backup.py` 不得 import `core.formats`**
+  （改坏了会立刻表现为 import 环，测试跑不起来）。
+
+---
+
+## ADR-012 ｜ 生成汉化版用"暂存目录 + 原子换名"，覆盖需显式确认
+
+* **日期**：2026-09-12（M2a）
+* **状态**：已采纳
+* **对应缺陷**：B-01、B-05、B-06
+
+### 背景
+
+原实现（`build.py:363-367`）：
+
+```python
+if os.path.exists(dst) and os.listdir(dst):
+    if not overwrite:
+        raise ValueError("目标目录已存在: %s" % dst)
+    shutil.rmtree(dst)          # ← 旧输出在这里就没了
+_copy_tree(game_dir, dst, progress_cb)
+```
+
+拷贝中途失败（磁盘满 / 权限 / 用户中断）→ **用户上一次生成的汉化版永久丢失**。
+另外前端"覆盖原游戏"没有任何确认对话框（B-05），`build()` 全程无 try/except（B-06）。
+
+### 决策
+
+1. **copy 模式改为三段式**：
+   * 拷贝到同父目录下的暂存目录 `<dst>.__staging_<时间戳>`
+   * 成功后：旧目录 `os.replace(dst, <dst>.__old_<时间戳>)` → `os.replace(staging, dst)` → 删旧
+   * 任一步失败：只 `rmtree(staging)`，**旧输出原封不动**
+   * 换名本身失败时，把旧目录放回原位（保证用户至少还有原来的输出）
+2. **覆盖需显式确认**：新增 `confirm_overwrite=True` 参数。
+   `overwrite=True` 而未确认 → 抛 `OverwriteNotConfirmed`；
+   **inplace 模式同样要求该参数**（覆盖的是用户原游戏）。
+3. **inplace 失败自动回滚**：写回阶段任何异常都会用刚做的备份
+   `restore_backup(safety=False)` 自动还原，并把回滚结果挂在
+   `BuildFailed.rollback` 上一起抛出。
+
+### 为什么"暂存 + 换名"而不是"先备份旧输出再删"
+
+旧输出可能很大（整个游戏目录），再备份一份等于磁盘占用翻倍。
+同目录内的 `os.replace` 是原子操作，且不需要额外空间复制旧树
+（只做目录项重命名）。旧目录的删除放在最后，失败也只是留下一个 `.__old_*` 目录。
+
+### 后果
+
+* 回归：`tests/compat/test_m2a_regressions.py::TestB01CopyFailureKeepsOldOutput`
+  （monkeypatch `copy_tree` 抛 `OSError`，断言旧输出字节完好）；
+  以及 `test_overwrite_without_confirmation_is_rejected` /
+  `test_inplace_without_confirmation_is_rejected`。
+* `copy_tree` 默认**跳过备份目录**（`汉化备份_*`），避免把用户的备份复制进输出。
+* M3a 接 UI 时必须把 `confirm_overwrite` 接到二次确认对话框上
+  （`docs/UI_SPEC.md` 交互范式第 3 条）。
+
+---
+
+## ADR-013 ｜ 合成 VX/XP 样本作为 `standard=True` 活路径的长期覆盖
+
+* **日期**：2026-09-12（M2a）
+* **状态**：已采纳
+* **对应需求**：§9 风险与边界
+
+### 背景
+
+本机游戏库覆盖 MV / MZ / VX Ace，**没有 VX（`.rvdata`）与纯 XP（`.rxdata`）游戏**。
+而 `standard=True`（XP/VX 的标准 Ruby Marshal 整数编码）恰恰是 P0 缺陷 B-10 的活路径。
+M0 已把这个缺口登记为"已知未验证边界"，M2a 必须给出结论。
+
+### 决策
+
+**用代码合成最小样本**，而不是"登记为边界"：
+
+* `tests/compat/test_standard_mode.py` 用 `doc_model` 构造最小 `.rvdata` / `.rxdata`
+  （`contents` 布局：`[header, [system, switches, variables, self_switches, actors,
+  party, troop, map, player]]`）
+* 覆盖：整数编解码两套模式的全部边界值、多流、`contents` 布局、
+  `GameData`/`SaveFile` 的完整读写改回读、改后再存的字节稳定性
+* 反向断言 VX Ace 仍走变体编码，不被牵连
+
+### 效果（这是本决策最有力的证据）
+
+合成样本**一加上就抓出两个此前完全没被发现的真实缺陷**：
+
+* **N-09**：`rgss_save.read_actors`/`set_actor_attr`/`set_actor_skills` 写死
+  `[v for k,v in actors_node.ivars][0]`，假设容器是对象；stock XP/VX 存档里它是
+  数组 → `AttributeError`，**整条 RGSS 存档读写不可用**
+* **N-10**：标准编码单字节上限写成 122，而 `0x7B` 是长格式标记 →
+  **118..122 五个值往返后被解成垃圾并让后续流错位**
+
+结论：**"没有样本"等价于"没有证据"**。合成本的成本很低（约 300 行），
+收益是两个 P0 级缺陷。真机样本仍然更有价值（能覆盖非标准变体），
+两者是互补而非替代：真机样本走 `TUDOU_RPGTOOL_SAMPLES`（不入库），
+合成样本入库存档（任何机器可跑）。
+
+### 遗留
+
+真机 VX / XP 样本仍是空白。`docs/ROADMAP.md` §3 保留该条目，
+建议在有条件时补一台真机样本（尤其是**汉化/破解变体**，合成样本覆盖不到）。

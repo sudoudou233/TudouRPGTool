@@ -3,9 +3,9 @@
 
 @feature  none
 @layer    core
-@public   atomic, backup, fontutil
-@depends  core.paths, core.marshal.value_model
-@tested   tests/unit/test_atomic.py
+@public   atomic, backup, builder, fontutil
+@depends  core.paths, core.formats, core.marshal.value_model
+@tested   tests/unit/test_atomic.py, tests/compat/test_build_backup.py
 @footprint docs/MODULES.md#coresafety
 
 硬约束（需求 §4.2）
@@ -17,11 +17,41 @@
 
 本包是这些约束的唯一落点：功能模块不得自行 ``open(path, "wb")``，
 必须走 :mod:`core.safety.atomic`。
+
+M2a 拆分（原为单个 vendored ``build.py``）
+----------------------------------------
+* :mod:`atomic`  —— 原子写 + 备份文件 + 目标护栏（无内部依赖）
+* :mod:`backup`  —— 备份 / 还原 / 清单（**不依赖 formats**，切断循环依赖）
+* :mod:`builder` —— 生成汉化版与字体应用的编排层（依赖 formats）
+* :mod:`fontutil`—— 字体族名解析
 """
 
 from __future__ import annotations
 
-# 显式重导出（F-05 会核对 @public 声明的名字真实存在）。
-from . import atomic, backup, fontutil  # noqa: E402,F401
+import importlib
 
-__all__ = ["atomic", "backup", "fontutil"]
+#: 子模块清单（PEP 562 懒加载用）。
+#:
+#: 为什么不在这里直接 import：``builder`` 依赖 ``core.formats``，而
+#: ``core.formats.*`` 又需要 ``core.safety.atomic``。若 ``core.safety`` 在被
+#: 导入时立刻把 ``builder`` 拉进来，就会形成
+#: ``formats.__init__ → mv_mz_data → safety.__init__ → builder → formats.mv_mz_data``
+#: 的环（M2a 实测复现）。改成按需加载后，``from core.safety.atomic import X``
+#: 只触发 atomic 子模块，环被切断。
+_SUBMODULES = ("atomic", "fontutil", "backup", "builder")
+
+
+def __getattr__(name):
+    """PEP 562：``core.safety.builder`` 这类属性访问时才真正 import。"""
+    if name in _SUBMODULES:
+        module = importlib.import_module("." + name, __name__)
+        globals()[name] = module
+        return module
+    raise AttributeError("module %r has no attribute %r" % (__name__, name))
+
+
+def __dir__():
+    return sorted(set(list(globals()) + list(_SUBMODULES)))
+
+
+__all__ = list(_SUBMODULES)
