@@ -239,6 +239,7 @@
       "feature": "none",
       "layer": "core",
       "public": [
+        "jsoncodec",
         "lzstring",
         "mv_mz_data",
         "rgss_data",
@@ -253,6 +254,25 @@
       "footprint": "docs/MODULES.md#coreformats",
       "vendored": false,
       "lines": 37
+    },
+    "core/formats/jsoncodec.py": {
+      "feature": "none",
+      "layer": "core",
+      "public": [
+        "read_text",
+        "read_json_file",
+        "dumps_pretty",
+        "dumps_compact",
+        "write_text_file"
+      ],
+      "depends": [
+        "core.formats.lzstring",
+        "core.safety.atomic"
+      ],
+      "tested": "tests/unit/test_jsoncodec.py, tests/compat/test_formats_compat.py",
+      "footprint": "docs/MODULES.md#coreformats",
+      "vendored": false,
+      "lines": 254
     },
     "core/formats/lzstring.py": {
       "feature": "cheats",
@@ -282,13 +302,14 @@
         "WRAPPER_KEYS"
       ],
       "depends": [
-        "core.textutil"
+        "core.textutil",
+        "core.formats.jsoncodec"
       ],
       "tested": "tests/compat/test_formats_compat.py",
       "footprint": "docs/MODULES.md#coreformats",
       "vendored": true,
-      "note": "vendored：来自 rpgmaker_translation_tool/tool/mv_mz.py。 M2b 抽出 core/formats/jsoncodec.py 后本文件只保留业务规则。",
-      "lines": 378
+      "note": "vendored：来自 rpgmaker_translation_tool/tool/mv_mz.py。 M2b 已把 JSON / 压缩 / 加密包装的**共同约定**收敛到 core/formats/jsoncodec.py，本文件只保留\"提取哪些字段、 改哪个键\"这类业务规则。 B-02 修复：写回走 core.safety.atomic（jsoncodec 转发的原子写）。",
+      "lines": 372
     },
     "core/formats/mv_save.py": {
       "feature": "cheats",
@@ -299,13 +320,13 @@
         "META_KEYS"
       ],
       "depends": [
-        "core.formats.lzstring"
+        "core.formats.jsoncodec"
       ],
       "tested": "tests/compat/test_formats_compat.py",
       "footprint": "docs/MODULES.md#coreformats",
       "vendored": true,
-      "note": "vendored：来自 rpgmaker_cheating_tool/mvdata.py。",
-      "lines": 288
+      "note": "vendored：来自 rpgmaker_cheating_tool/mvdata.py。 M2b 已把 JSON / 压缩 / JsonEx 元数据约定收敛到 core/formats/jsoncodec.py（与 mv_mz_data 共用一份实现）， 本文件只保留\"改哪个键、怎么改\"的业务规则。",
+      "lines": 283
     },
     "core/formats/rgss_data.py": {
       "feature": "translate",

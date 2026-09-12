@@ -1,35 +1,38 @@
 # -*- coding: utf-8 -*-
 """
-RPG Maker MV / MZ save & data access.
+RPG Maker MV / MZ 存档读写（``file*.rpgsave`` / ``file*.rmmzsave``）。
 
 @feature  cheats
 @layer    core
 @public   GameDataMV, SaveFileMV, META_KEYS
-@depends  core.formats.lzstring
+@depends  core.formats.jsoncodec
 @tested   tests/compat/test_formats_compat.py
 @footprint docs/MODULES.md#coreformats
 @note     vendored：来自 rpgmaker_cheating_tool/mvdata.py。
+@note     M2b 已把 JSON / 压缩 / JsonEx 元数据约定收敛到
+@note     core/formats/jsoncodec.py（与 mv_mz_data 共用一份实现），
+@note     本文件只保留"改哪个键、怎么改"的业务规则。
 
+MV 存档（``www/save/file*.rpgsave``）是 LZString(base64) 的 JSON，
+对象带 JsonEx 元数据键（``@c`` / ``@`` / ``@r`` / ``@a``）。
+MZ 存档（``save/file*.rmmzsave``）是 zlib 压缩的 JSON，压缩字节先经
+latin-1 往返成 UTF-8 文本再落盘。
 
-MV  saves (www/save/file*.rpgsave)  are LZString(base64) of JSON, using the
-game's modified JsonEx (objects carry "@c"/"@"/"@r"/"@a" metadata keys).
-MZ  saves (save/file*.rmmzsave) are zlib-compressed JSON stored as UTF-8 text
-(the compressed bytes are round-tripped through a latin-1 string first).
-
-The editor only changes primitive values (numbers) and hash entries, so all
-JsonEx metadata stays valid and the save remains loadable.
+编辑器只改**原始值**（数字）与哈希条目，因此 JsonEx 元数据保持有效，
+存档仍然可被游戏读取。
 """
 import json
 import os
-import zlib
 
-from . import lzstring
+from ..constants import PARAMS
+from . import jsoncodec
 
-META_KEYS = {'@c', '@a', '@', '@r'}
+#: JsonEx 元数据键（真源在 jsoncodec）
+META_KEYS = jsoncodec.META_KEYS
 
 
 def _unwrap_list(x):
-    """MV JsonEx wraps arrays as {'@c': id, '@a': [...]}; MZ keeps them plain."""
+    """MV JsonEx 把数组包成 ``{'@c': id, '@a': [...]}``；MZ 保持普通列表。"""
     if isinstance(x, dict) and isinstance(x.get('@a'), list):
         return x['@a']
     if isinstance(x, list):
@@ -38,16 +41,8 @@ def _unwrap_list(x):
 
 
 def _clean_ints(d):
-    """dict (item ids -> counts) with possible '@c' metadata -> {int: int}."""
-    out = {}
-    for k, v in d.items():
-        if k in META_KEYS:
-            continue
-        try:
-            out[int(k)] = int(v)
-        except (TypeError, ValueError):
-            continue
-    return out
+    """``{id: count}``（可能带 ``@c`` 元数据）-> ``{int: int}``。"""
+    return jsoncodec.int_map_from(d)
 
 
 class GameDataMV:
@@ -64,11 +59,11 @@ class GameDataMV:
         self._load_names()
 
     def _load_json(self, fname):
+        """读数据文件；不存在返回 None，坏了则抛 ValueError（不静默吞）。"""
         path = os.path.join(self.datadir, fname)
         if not os.path.exists(path):
             return None
-        with open(path, 'r', encoding='utf-8-sig') as fh:
-            return json.load(fh)
+        return jsoncodec.read_json_file(path)
 
     def _load_names(self):
         for fname, store in [('Items.json', self.items),
@@ -105,35 +100,35 @@ class GameDataMV:
 
 
 class SaveFileMV:
-    """MV / MZ save file editor (unified interface with rpgdata.SaveFile)."""
+    """MV / MZ 存档编辑器（与 ``core/formats/rgss_save.SaveFile`` 接口一致）。"""
 
-    PARAMS = ['最大HP', '最大MP', '攻击', '防御', '魔攻', '魔防', '速度', '幸运']
+    #: 8 项属性加成的显示名（真源：core/constants.py 的 PARAMS）
+    PARAMS = list(PARAMS)
 
     def __init__(self, path, gamedata=None, engine='mv'):
         self.path = path
         self.gamedata = gamedata
         self.engine = engine
-        self.raw = open(path, 'rb').read()
+        with open(path, 'rb') as f:
+            self.raw = f.read()
+        # 内容优先于参数：真实游戏里存在扩展名与内容不一致的情况
+        self.engine = jsoncodec.save_engine(self.raw, default=engine)
         self.data = self._load(self.raw)
 
     # ------------------------------------------------------------- (de)code
     @staticmethod
     def _load(raw):
-        if raw and raw[0] == 0x78:  # MZ: zlib stream stored as UTF-8 text
-            latin = raw.decode('utf-8')
-            zbytes = latin.encode('latin-1')
-            text = zlib.decompress(zbytes).decode('utf-8')
-            return json.loads(text)
-        text = lzstring.decompress_from_base64(raw.decode('utf-8', 'replace'))
-        return json.loads(text)
+        """存档字节 -> Python 数据。
+
+        压缩判别与解压由 :func:`core.formats.jsoncodec.decompress_save`
+        统一提供（与 mv_mz_data 共用一份约定）。
+        """
+        return json.loads(jsoncodec.decompress_save(raw))
 
     @staticmethod
     def _dump(data, engine):
-        text = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
-        if engine == 'mz':
-            zbytes = zlib.compress(text.encode('utf-8'), 1)
-            return zbytes.decode('latin-1').encode('utf-8')
-        return lzstring.compress_to_base64(text).encode('utf-8')
+        """Python 数据 -> 存档字节（紧凑 JSON + 对应压缩）。"""
+        return jsoncodec.compress_save(jsoncodec.dumps_compact(data), engine)
 
     # ---------------------------------------------------------------- lookup
     def _party(self):

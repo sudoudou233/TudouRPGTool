@@ -1,102 +1,96 @@
 # -*- coding: utf-8 -*-
 """
-Extraction and patching for RPG Maker MV / MZ JSON data files.
+RPG Maker MV / MZ 游戏数据（``data/*.json``）的文本提取与写回。
 
 @feature  translate
 @layer    core
 @public   extract, apply_to_files, TEXT_CODES, WRAPPER_KEYS
-@depends  core.textutil
+@depends  core.textutil, core.formats.jsoncodec
 @tested   tests/compat/test_formats_compat.py
 @footprint docs/MODULES.md#coreformats
 @note     vendored：来自 rpgmaker_translation_tool/tool/mv_mz.py。
-@note     M2b 抽出 core/formats/jsoncodec.py 后本文件只保留业务规则。
+@note     M2b 已把 JSON / 压缩 / 加密包装的**共同约定**收敛到
+@note     core/formats/jsoncodec.py，本文件只保留"提取哪些字段、
+@note     改哪个键"这类业务规则。
+@note     B-02 修复：写回走 core.safety.atomic（jsoncodec 转发的原子写）。
 """
 
 from __future__ import annotations
 
 import json
 import os
-import base64
 
-from ..safety.atomic import atomic_write_text
 from ..textutil import has_real_text
+from . import jsoncodec
+
+#: 加密包装的外层键（真源在 jsoncodec，这里保留别名以免破坏调用方）
+WRAPPER_KEYS = jsoncodec.WRAPPER_KEYS
 
 
-WRAPPER_KEYS = ("uid", "bid", "data")
-
-
+# ---------------------------------------------------------------------------
+# 加密包装（实现已移到 jsoncodec，这里保留同名薄封装）
+#
+# 为什么保留私有名：这两组函数名（_derive_key / _crypt_bytes / _decrypt_wrapped
+# / _encrypt_wrapped）已被 tests/compat/test_formats_compat.py 的
+# TestEncryptedWrapper 使用，且它们是"包装格式"的稳定接口。真正的实现只有
+# jsoncodec 一份，这里只是转发，避免出现第二份实现（需求 §3.3 的要求）。
+# ---------------------------------------------------------------------------
 def _derive_key(fname):
-    """Key derivation used by wrapped (encrypted) MV/MZ JSON data files."""
-    name = os.path.splitext(os.path.basename(fname))[0]
-    t = 0
-    for ch in name:
-        t = ((t << 5) - t + ord(ch)) & 0xFFFFFFFF
-    return 205 ^ (t & 255)  # window._K = Math.sqrt(42025) = 205
+    """（转发）由文件名派生包装密钥。"""
+    return jsoncodec.derive_wrapper_key(fname)
 
 
 def _crypt_bytes(data, fk, encrypt):
-    b = bytearray(data)
-    ls = fk
-    for i in range(len(b) - 1, -1, -1):
-        _c = fk ^ 72
-        _m = i % 128
-        _p = ((ls << 2) ^ (ls >> 4))
-        _k = ((((_c + _m + _p) ^ 160) + 18)) & 255
-        if encrypt:
-            orig = b[i]
-            b[i] = orig ^ _k
-            ls = orig
-        else:
-            v = b[i] ^ _k
-            b[i] = v
-            ls = v
-    return bytes(b)
+    """（转发）包装体的异或流加解密。"""
+    return jsoncodec.crypt_wrapper_bytes(data, fk, encrypt)
 
 
 def _decrypt_wrapped(data_b64, fname):
-    fk = _derive_key(fname)
-    raw = base64.b64decode(data_b64)
-    return _crypt_bytes(raw, fk, encrypt=False).decode("utf-8")
+    """（转发）解密包装体内层文本。"""
+    return jsoncodec.decrypt_wrapper_payload(data_b64, fname)
 
 
 def _encrypt_wrapped(plain_text, fname):
-    fk = _derive_key(fname)
-    raw = _crypt_bytes(plain_text.encode("utf-8"), fk, encrypt=True)
-    return base64.b64encode(raw).decode("ascii")
+    """（转发）加密包装体内层文本。"""
+    return jsoncodec.encrypt_wrapper_payload(plain_text, fname)
 
 
 def _load_data_file(full, fname):
-    """Load a JSON data file, transparently unwrapping encrypted files."""
-    with open(full, encoding="utf-8-sig") as f:
-        data = json.load(f)
-    if isinstance(data, dict) and all(k in data for k in WRAPPER_KEYS):
-        header = {"uid": data.get("uid", ""), "bid": data.get("bid", "")}
-        plain = _decrypt_wrapped(data["data"], fname)
+    """读一个数据文件，透明地解开加密包装。
+
+    返回 ``(data, wrapped, header)``。
+    """
+    data = jsoncodec.read_json_file(full)
+    if jsoncodec.is_wrapped(data):
+        header, payload = jsoncodec.split_wrapper(data)
+        plain = jsoncodec.decrypt_wrapper_payload(payload, fname)
         return json.loads(plain), True, header
     return data, False, None
 
 
 def _save_data_file(full, fname, data, wrapped, header):
-    """写回 JSON 数据文件。
+    """写回 JSON 数据文件（**原子写**）。
 
-    ⚠ 2026-09-12 M2a 修复 **B-02**：原实现直接 ``open(full, "w")`` 截断重写，
-    写一半被中断就留下**半写的 JSON**，游戏直接读不了档。现改为走
-    :mod:`core.safety.atomic`（临时文件 + fsync + ``os.replace``），
-    任何失败都不会破坏原文件。
+    ⚠ M2a 修复 **B-02**：原实现直接 ``open(full, "w")`` 截断重写，
+    写一半被中断就留下**半写的 JSON**，游戏直接读不了档。现在走
+    :mod:`core.safety.atomic`（临时文件 + fsync + ``os.replace``）。
 
-    ``atomic_write_text`` 默认把 ``\\r\\n`` 规范化为 ``\\n``，与原实现的
+    M2b：JSON 风格（缩进 2 / 不转义非 ASCII）统一由
+    :func:`core.formats.jsoncodec.dumps_pretty` 提供，两条 MV/MZ 路径共用。
+
+    ``atomic_write_text`` 把 ``\\r\\n`` 规范化为 ``\\n``，与原实现的
     ``newline="\\n"`` 行为一致（原实现的刻意选择：数据文件不需要 CRLF）。
     """
     if wrapped:
-        header = header or {"uid": "", "bid": ""}
-        plain = json.dumps(data, ensure_ascii=False, indent=2)
-        payload = {"uid": header["uid"], "bid": header["bid"],
-                   "data": _encrypt_wrapped(plain, fname)}
+        plain = jsoncodec.dumps_pretty(data)
+        payload = jsoncodec.join_wrapper(
+            header, jsoncodec.encrypt_wrapper_payload(plain, fname))
         # 保留原行为：wrapped 分支的 uid/bid/加密 data 都是 ASCII，
         # 用默认 ensure_ascii=True 输出（与原 json.dump 调用一致）
-        atomic_write_text(full, json.dumps(payload))
+        jsoncodec.write_text_file(full, json.dumps(payload))
         return
-    atomic_write_text(full, json.dumps(data, ensure_ascii=False, indent=2))
+    jsoncodec.write_text_file(full, jsoncodec.dumps_pretty(data))
+
 
 # Event command codes whose parameters contain player-visible text.
 # value = (parameter index, category)

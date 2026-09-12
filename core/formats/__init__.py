@@ -3,7 +3,7 @@
 
 @feature  none
 @layer    core
-@public   lzstring, mv_mz_data, rgss_data, mv_save, rgss_save
+@public   jsoncodec, lzstring, mv_mz_data, rgss_data, mv_save, rgss_save
 @depends  core.textutil, core.marshal
 @tested   tests/compat/test_formats_compat.py
 @footprint docs/MODULES.md#coreformats
@@ -16,21 +16,30 @@
 * ``rgss_save``   RGSS **存档**（``Save*.rvdata2|rvdata|rxdata``）
 * ``lzstring``    MV 存档所用的 LZString 纯 Python 实现
 
-收敛目标（需求 §3.3 第三类重复）
--------------------------------
-``mv_mz_data`` 与 ``mv_save`` 目前各自实现了 JSON / 压缩 / 编码约定的处理
-（``utf-8-sig``、JsonEx 元数据 ``@c/@a/@/@r``、写回风格）。M2b 抽出共享的
-``core/formats/jsoncodec.py``（JSON + LZString + zlib + 加密包装），
-两侧业务层保持独立。验收：一个实现，两条路径共用，两侧测试全绿。
+收敛结果（需求 §3.3 第三类重复）—— **M2b 已完成**
+------------------------------------------------
+``mv_mz_data`` 与 ``mv_save`` 曾各自实现 JSON / 压缩 / 编码约定的处理。
+M2b 已把**共同约定**收敛到 :mod:`core.formats.jsoncodec`：
+
+* JSON 两种风格（游戏数据用缩进、存档用紧凑）
+* ``utf-8-sig`` BOM 容忍与"坏 JSON 必须抛错"的读法
+* JsonEx 元数据键 ``@c/@a/@/@r`` 的唯一真源
+* 加密包装 ``{"uid","bid","data"}`` 的密钥派生与异或流加解密
+* LZString / zlib 的压缩与**按内容**判别
+
+两侧业务层只保留"提取哪些字段 / 改哪个键"的规则。
+验收：包装与压缩各只有一份实现 —— 由
+``tests/unit/test_jsoncodec.py::TestConvergence`` 静态断言守护（含"禁止在
+mv_mz_data 里再写一遍 base64/密钥派生/压缩调用"）。
 """
 
 from __future__ import annotations
 
-#: 收敛状态：'pending'（尚未抽出共享 jsoncodec） / 'merged'
-CONVERGENCE_STATUS = "pending"
+#: 收敛状态：'pending'（尚未抽出共享 jsoncodec） / 'merged'（已收敛）
+CONVERGENCE_STATUS = "merged"
 
-__all__ = ["lzstring", "mv_mz_data", "rgss_data", "mv_save", "rgss_save",
+__all__ = ["jsoncodec", "lzstring", "mv_mz_data", "rgss_data", "mv_save", "rgss_save",
            "CONVERGENCE_STATUS"]
 
 # 显式重导出（check_footprint 的 F-05 会核对 @public 声明的名字真实存在）。
-from . import lzstring, mv_mz_data, mv_save, rgss_data, rgss_save  # noqa: E402,F401
+from . import jsoncodec, lzstring, mv_mz_data, mv_save, rgss_data, rgss_save  # noqa: E402,F401
