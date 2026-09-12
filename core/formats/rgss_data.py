@@ -197,15 +197,48 @@ def _pairs_of_values(container):
     return _values_of(_unwrap(container))
 
 
-def extract(data_dir, opts):
+#: RGSS 数据文件的扩展名。**三种都要认**（M5 实测踩到）：
+#: 早期只写了 ``.rvdata2`` 与 ``.rxdata``，于是 **VX 的 ``.rvdata`` 被整个跳过**
+#: —— 不报错，只是"扫描结果为 0 条"。
+RGSS_DATA_EXTS = (".rvdata2", ".rvdata", ".rxdata")
+
+
+def load_data_file(path, standard=None):
+    """读一个 RGSS 数据文件，返回节点树。
+
+    ``standard`` 为 ``None`` 时**两种整数编码都试**（先按探针判据给的偏好，
+    再试另一种）。为什么要两遍（M5 实测踩到）：``.rvdata2`` 在改造版运行时
+    下是**变体**编码，而标准 VX 的 ``.rvdata`` 是**标准**编码；引擎判据通常
+    知道答案，但误判（例如换过运行时的游戏）会让整个文件静默解析失败 ——
+    表现同样是"扫描 0 条"而不报错。两遍的成本只是一次 try。
+    """
+    with open(path, "rb") as f:
+        raw = f.read()
+    order = [True, False] if standard is None else (
+        [standard, not standard] if standard in (True, False) else [False, True])
+    errors = []
+    for flag in order:
+        try:
+            return marshal.loads(raw, standard=flag)
+        except Exception as exc:       # 编码猜错 → 换另一种再试
+            errors.append("%s=%s" % (flag, exc))
+    raise ValueError("无法解析 %s（两种整数编码都失败：%s）"
+                     % (os.path.basename(path), "; ".join(errors)))
+
+
+def extract(data_dir, opts, standard=None):
+    """提取可翻译文本。
+
+    ``standard`` 是引擎的整数编码偏好（``info['standard']``）；为 ``None``
+    时由 :func:`load_data_file` 两种都试。
+    """
     entries = []
     for fname in sorted(os.listdir(data_dir)):
-        if not (fname.endswith(".rvdata2") or fname.endswith(".rxdata")):
+        if not fname.endswith(RGSS_DATA_EXTS):
             continue
         full = os.path.join(data_dir, fname)
         try:
-            with open(full, "rb") as f:
-                data = marshal.loads(f.read())
+            data = load_data_file(full, standard)
         except Exception:
             continue
         base = fname.rsplit(".", 1)[0]
@@ -666,15 +699,15 @@ def apply_to_files(game_info, entries_by_file, progress=None):
     """
     stats = {"files": 0, "entries": 0, "skipped": 0}
     data_dir = game_info["data_dir"]
+    standard = game_info.get("standard")
     for fname, entries in entries_by_file.items():
-        if not (fname.endswith(".rvdata2") or fname.endswith(".rxdata")):
+        if not fname.endswith(RGSS_DATA_EXTS):
             continue
         full = os.path.join(data_dir, fname)
         if not os.path.isfile(full):
             continue
         try:
-            with open(full, "rb") as f:
-                root = marshal.loads(f.read())
+            root = load_data_file(full, standard)
         except Exception:
             continue
         changed = False

@@ -245,6 +245,55 @@ class SaveFile:
         self.streams = rmarshal.load_streams(self.raw, standard=standard)
 
     # ---------------------------------------------------------------- lookup
+    #: 判定"哪一条流是游戏状态"的关键字（多流存档里第一条可能只是元数据）
+    STATE_KEY = "party"
+
+    def _has_state(self, stream_node):
+        """这条流里是否有游戏状态（``party``）。"""
+        if self.layout == "hash":
+            if not isinstance(stream_node, rmarshal.Hash):
+                return False
+            return (self._stream_key(stream_node, self.STATE_KEY) is not None)
+        top = self._top(stream_node)
+        if top is None:
+            return False
+        return self._get(stream_node, self.STATE_KEY) is not None
+
+    def _stream_key(self, stream_node, key):
+        """在顶层 Hash 里按键名找值（找不到返回 None）。"""
+        parser = getattr(stream_node, "_parser", None)
+        for k, v in stream_node.entries:
+            if _symname(parser, k) == key:
+                return v
+        return None
+
+    def state_index(self):
+        """返回**游戏状态所在的流下标**。
+
+        ⚠ 为什么不能一律用 ``streams[0]``（M5 用真实样本实测踩到）：
+        改造版（MTool 系）VX Ace 运行时会把存档写成**两条流** ——
+        第一条是启动器/工具的元数据（实测是
+        ``{characters: [...], playtime_s: "00:00:42"}``），
+        第二条才是真正的游戏状态（``system/party/actors/...``）。
+
+        旧实现硬编码 ``self.streams[0]``，于是读真实存档时
+        ``read_party()`` 返回空 dict、``read_actors()`` 返回空列表 ——
+        **界面显示"金币 —、没有角色"，而文件其实完好**。
+        这类"读不出来但不报错"与前几个 N 编号缺陷同一家族。
+
+        找不到状态流时回落到 0（保持旧行为，让错误暴露在数据上而不是异常里）。
+        """
+        for index, (_offset, node) in enumerate(self.streams):
+            if self._has_state(node):
+                return index
+        return 0
+
+    def _pick(self, stream_index):
+        """把 ``stream_index`` 归一化成真实下标（``None``/0 表示自动探测）。"""
+        if stream_index in (None, 0):
+            return self.state_index()
+        return stream_index
+
     def _top(self, stream_node):
         if self.layout == 'hash':
             return stream_node if isinstance(stream_node, rmarshal.Hash) else None
@@ -287,10 +336,17 @@ class SaveFile:
 
     # ---------------------------------------------------------------- reading
     def read_party(self, stream_index=0):
-        party = self._party(self.streams[stream_index][1])
+        """读队伍 / 金币 / 步数 / 三个道具桶。
+
+        ``stream_index`` 传 ``0`` 或 ``None`` 表示**自动探测状态流**
+        （见 :meth:`state_index`）；显式传其它下标则按该流读（单流存档与
+        既有测试依赖这一点）。
+        """
+        index = self._pick(stream_index)
+        party = self._party(self.streams[index][1])
         if party is None:
             return {}
-        p = self.streams[stream_index][1]._parser
+        p = self.streams[index][1]._parser
         items = self._hash_ints(self._ivar(party, '@items'))
         weapons = self._hash_ints(self._ivar(party, '@weapons'))
         armors = self._hash_ints(self._ivar(party, '@armors'))
@@ -329,14 +385,15 @@ class SaveFile:
 
         现在两种形态都支持：对象取第一个 ivar（``@data``），数组直接用。
         """
-        actors_node = self._actors(self.streams[stream_index][1])
+        index = self._pick(stream_index)
+        actors_node = self._actors(self.streams[index][1])
         if actors_node is None:
             return []
         arr = _as_array(actors_node)
         if arr is None:
             return []
         result = []
-        p = self.streams[stream_index][1]._parser
+        p = self.streams[index][1]._parser
         for i, a in enumerate(arr.items):
             if a is None or isinstance(a, rmarshal.NilNode):
                 result.append(None)
@@ -372,9 +429,30 @@ class SaveFile:
     def _mark(self, node):
         node.dirty = True
 
+    def _target_streams(self, all_streams):
+        """写操作要覆盖的流下标。
+
+        多流存档里**不是每条流都有游戏状态**（改造版 VX Ace 的第一条流是
+        启动器元数据）。写操作必须跳过那些没有状态的流，否则会在
+        ``None`` 上取 ivar 而抛 ``AttributeError`` —— M5 用真实样本实测踩到。
+        """
+        state = self.state_index()
+        if all_streams:
+            return [i for i, (_o, node) in enumerate(self.streams)
+                    if self._has_state(node)] or [state]
+        return [state]
+
+    def _party_of(self, index):
+        party = self._party(self.streams[index][1])
+        # ObjectNode 才有 ivars；Hash/None 都说明这条流不是状态流
+        if not isinstance(party, rmarshal.ObjectNode):
+            return None
+        return party
+
     def read_var(self, key, stream_index=0):
         """Read a Game_Switches / Game_Variables @data array."""
-        sn = self.streams[stream_index][1]
+        index = self._pick(stream_index)
+        sn = self.streams[index][1]
         obj = self._get(sn, key)
         if obj is None:
             return []
@@ -415,28 +493,30 @@ class SaveFile:
             obj.dirty = True
 
     def set_gold(self, value, all_streams=True):
-        for idx, (off, sn) in enumerate(self.streams):
-            if not all_streams and idx != 0:
+        for index in self._target_streams(all_streams):
+            party = self._party_of(index)
+            if party is None:
                 continue
-            party = self._party(sn)
             g = self._ivar(party, '@gold')
             if isinstance(g, rmarshal.Fixnum):
                 g.set_value(int(value))
+                party.dirty = True
 
     def set_steps(self, value, all_streams=True):
-        for idx, (off, sn) in enumerate(self.streams):
-            if not all_streams and idx != 0:
+        for index in self._target_streams(all_streams):
+            party = self._party_of(index)
+            if party is None:
                 continue
-            party = self._party(sn)
             s = self._ivar(party, '@steps')
             if isinstance(s, rmarshal.Fixnum):
                 s.set_value(int(value))
+                party.dirty = True
 
     def set_item(self, id_, count, kind='items', all_streams=True):
-        for idx, (off, sn) in enumerate(self.streams):
-            if not all_streams and idx != 0:
+        for index in self._target_streams(all_streams):
+            party = self._party_of(index)
+            if party is None:
                 continue
-            party = self._party(sn)
             h = self._ivar(party, '@' + kind)
             if not isinstance(h, rmarshal.Hash):
                 continue

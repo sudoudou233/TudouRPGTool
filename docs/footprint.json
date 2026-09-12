@@ -334,7 +334,7 @@
       "footprint": "docs/MODULES.md#coreformats",
       "vendored": true,
       "note": "vendored：来自 rpgmaker_translation_tool/tool/vxace.py。 已知缺陷 B-02（非原子写）、B-13（original 参数未用于校验）。",
-      "lines": 715
+      "lines": 748
     },
     "core/formats/rgss_save.py": {
       "feature": "cheats",
@@ -353,7 +353,7 @@
       "footprint": "docs/MODULES.md#coreformats",
       "vendored": true,
       "note": "vendored：来自 rpgmaker_cheating_tool/rpgdata.py。 **M3b 修复两处**： 1) B-02 残留：save() 原先直接 ``open(path, 'wb')`` → 改原子写； 2) 句柄泄漏：``open(path,'rb').read()`` 依赖 GC 关闭文件 （Windows 上会让后续替换/删除失败）→ 改 ``with`` 语句。",
-      "lines": 535
+      "lines": 615
     },
     "core/jobs.py": {
       "feature": "none",
@@ -635,7 +635,7 @@
       "tested": "tests/features/cheats/test_routes.py",
       "footprint": "docs/FEATURES.md#cheats",
       "vendored": false,
-      "lines": 493
+      "lines": 505
     },
     "features/cheats/manifest.py": {
       "feature": "cheats",
@@ -673,7 +673,7 @@
       "tested": "tests/features/cheats/test_routes.py",
       "footprint": "docs/FEATURES.md#cheats",
       "vendored": false,
-      "lines": 695
+      "lines": 760
     },
     "features/translate/__init__.py": {
       "feature": "translate",
@@ -743,7 +743,7 @@
       "footprint": "docs/FEATURES.md#translate",
       "vendored": true,
       "note": "vendored：来自 rpgmaker_translation_tool/tool/session.py。 注意 engines.detect 的返回结构已是新 core 的统一结构， M3a 需核对 info 字段使用点（原实现用 engine_name/supported）。",
-      "lines": 147
+      "lines": 151
     },
     "features/translate/translators.py": {
       "feature": "translate",

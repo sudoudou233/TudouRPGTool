@@ -70,7 +70,11 @@ class Session:
         if engine in ("mv", "mz"):
             raw = mv_mz.extract(self.info["data_dir"], self.options)
         else:
-            raw = vxace.extract(self.info["data_dir"], self.options)
+            # ``standard`` 一定要透传：VX（.rvdata）是标准整数编码，
+            # 而 VX Ace（.rvdata2）在改造版运行时下是变体编码。
+            # 不传的话 VX 的每个数据文件都会解析失败 → **静默扫出 0 条**（N-18）。
+            raw = vxace.extract(self.info["data_dir"], self.options,
+                                standard=self.info.get("standard"))
         self.entries = {}
         for e in raw:
             self.entries[self.key_for(e)] = e

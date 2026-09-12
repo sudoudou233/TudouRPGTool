@@ -154,9 +154,22 @@ class CheatsService(object):
 
     # ------------------------------------------------------------ 存档列表
     def list_saves(self):
+        """本游戏所有存档（跨目录，按目录去重）。
+
+        ⚠ 两个来源必须**按目录去重**：``info['save_dir']`` 是引擎判据给的
+        标准位置，而 ``engines.find_save_dirs`` 也会把它包含进来（它把
+        ``save_dir`` 预置进结果）。不去重就会把同一个存档列两遍 ——
+        M3b 实测踩到：界面上出现两行一模一样的存档，用户不知道点哪个。
+        """
         info = self.require_game()
         out = []
-        for directory, names in engines.find_save_dirs(info, self.game_dir):
+        seen_dirs = set()
+
+        def collect(directory, names):
+            absdir = os.path.abspath(directory)
+            if absdir in seen_dirs:
+                return
+            seen_dirs.add(absdir)
             for name in names:
                 path = os.path.join(directory, name)
                 try:
@@ -172,20 +185,69 @@ class CheatsService(object):
                     "time": time.strftime("%Y-%m-%d %H:%M:%S",
                                           time.localtime(mtime)) if mtime else "",
                 })
+
+        if info.get("save_dir"):
+            collect(info["save_dir"], engines.list_saves(info, self.game_dir))
+        for directory, names in engines.find_save_dirs(info, self.game_dir):
+            collect(directory, names)
         return out
+
+    def save_dirs(self):
+        """本游戏所有**合法**的存档目录（用于校验路径、也用于展示）。
+
+        包含两类：
+
+        * ``info['save_dir']`` —— 引擎判据给出的标准位置（MV/MZ 是
+          ``<js根>/save``，RGSS 是游戏根）；**即使它现在是空的也要算**，
+          因为"目录里还没有存档"不等于"不许往这里写"；
+        * ``engines.find_save_dirs`` 递归找到的其它位置 —— 应对自动存档、
+          旧版布局（例如老 MV 把存档放在 ``www/save``）等第二套存档。
+
+        结果按绝对路径**去重**：RGSS 的 ``save_dir`` 就是游戏根，
+        而游戏根本来也在候选里，不去重会在界面上出现两个一样的位置。
+        """
+        info = self.require_game()
+        seen = []
+
+        def add(path):
+            if not path:
+                return
+            absdir = os.path.abspath(path)
+            if absdir not in seen:
+                seen.append(absdir)
+
+        add(info.get("save_dir"))
+        for directory, _names in engines.find_save_dirs(info, self.game_dir):
+            add(directory)
+        add(self.game_dir)
+        return seen
+
+    def _assert_inside_save_dirs(self, path):
+        """确认 ``path`` 落在本游戏的某个存档目录里（越权读盘的防线）。
+
+        ⚠ 用 ``os.path.commonpath`` 而不是 ``str.startswith(dir + os.sep)``：
+        字符串前缀判据在大小写不一致（Windows）或目录名互为前缀
+        （``save`` 与 ``save2``）时会判错。M3b 实测还踩到另一处：
+        只把"**当前有存档的**目录"算作合法会让空目录里的合法路径被拒 ——
+        所以 :meth:`save_dirs` 必须无条件包含 ``info['save_dir']``。
+        """
+        target = os.path.abspath(path)
+        for directory in self.save_dirs():
+            try:
+                if os.path.commonpath([target, directory]) == directory:
+                    return
+            except ValueError:
+                # 不同盘符 → 必然不在其中
+                continue
+        raise ValueError("该文件不在本游戏的存档目录内：%s" % path)
 
     def open_save(self, path):
         """打开存档。``path`` 必须在游戏目录下的某个存档目录里（防越权读盘）。"""
-        info = self.require_game()
         path = os.path.abspath(path)
-        allowed = [os.path.abspath(d) for d, _n in
-                   engines.find_save_dirs(info, self.game_dir)]
-        allowed.append(os.path.abspath(self.game_dir))
-        if not any(path.startswith(d + os.sep) or os.path.dirname(path) == d
-                   for d in allowed):
-            raise ValueError("该文件不在本游戏的存档目录内：%s" % path)
+        self._assert_inside_save_dirs(path)
         if not os.path.isfile(path):
             raise ValueError("存档不存在：%s" % path)
+        info = self.info
         if self.engine in ("mv", "mz"):
             save = mv_save.SaveFileMV(path, gamedata=self.gamedata,
                                       engine=self.engine)
@@ -414,6 +476,7 @@ def register_routes(ctx, service):
             return {"ok": False, "error": str(exc)}
         return {"ok": True, "saves": service.list_saves(),
                 "current": service.save_path,
+                "save_dirs": service.save_dirs(),
                 "backups": backup_mod.list_backups(service.game_dir)}
 
     @ctx.post("/api/cheats/load", name="cheats_load")
@@ -593,7 +656,8 @@ def register_routes(ctx, service):
         file_filter = (request.str_arg("file") if request else "") or None
         try:
             rows = data_fields.scan_data(info["data_dir"], service.engine,
-                                         [file_filter] if file_filter else None)
+                                         [file_filter] if file_filter else None,
+                                         standard=info.get("standard"))
         except Exception as exc:
             return {"ok": False,
                     "error": "读取游戏数据失败：%s: %s" % (type(exc).__name__, exc)}
@@ -638,7 +702,8 @@ def register_routes(ctx, service):
                     "error": "写回失败：%s: %s" % (type(exc).__name__, exc),
                     "backup_dir": policy.last_dir}
         return {"ok": True, "stats": stats, "backup_dir": backup_dir,
-                "fields": data_fields.scan_data(info["data_dir"], service.engine)}
+                "fields": data_fields.scan_data(info["data_dir"], service.engine,
+                                                standard=info.get("standard"))}
 
     # ------------------------------------------------------------------ 备份还原
     @ctx.get("/api/cheats/backups", name="cheats_backups")

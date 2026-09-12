@@ -221,12 +221,15 @@ def _candidates(engine, fname):
     return ("%s.rvdata2" % base, "%s.rvdata" % base, "%s.rxdata" % base)
 
 
-def _read_file(engine, data_dir, fname):
+def _read_file(engine, data_dir, fname, standard=None):
     """读数据文件为 Python 结构；读不到返回 ``None``。
 
     MV/MZ 走 :func:`core.formats.mv_mz_data._load_data_file`（含加密包装与
-    BOM 处理）；RGSS 走 ``doc_model`` 解析成节点树，再用 ``to_plain()``
-    转成普通结构 —— **只用于展示**，写回仍走节点树，不会因此丢字节保真。
+    BOM 处理）；RGSS 走 :func:`core.formats.rgss_data.load_data_file`
+    （**必须把引擎的整数编码偏好传进去**：VX Ace 是变体编码，VX/XP 是标准编码；
+    猜错会让整个文件读不出来 —— 表现是"字段列表为空"而不是报错）。
+
+    解析成普通结构只用于**展示**，写回仍走节点树，不会因此丢字节保真。
     """
     for name in _candidates(engine, fname):
         path = os.path.join(data_dir, name)
@@ -235,11 +238,14 @@ def _read_file(engine, data_dir, fname):
         if engine in ("mv", "mz"):
             data, _wrapped, _header = mv_mz_data._load_data_file(path, name)
             return name, data
-        from core.marshal import doc_model as D
-        with open(path, "rb") as f:
-            raw = f.read()
-        tree = D.loads(raw)
-        return name, _to_plain(tree)
+        from core.formats import rgss_data
+        from core.marshal import value_layer
+        tree = rgss_data.load_data_file(path, standard)
+        # ⚠ ``rgss_data.load_data_file`` 返回的是**值层代理**（RMArray 等），
+        # 而 :func:`_to_plain` 按 doc_model 节点判定类型 —— 直接喂代理会让
+        # 每个类型判断都不成立，于是整个文件"读出来是 None"（界面表现为
+        # 可编辑字段为空）。必须先 unwrap 回节点（M5 实测踩到）。
+        return name, _to_plain(value_layer.unwrap_to_node(tree))
     return None, None
 
 
@@ -311,11 +317,16 @@ def _dig(data, path):
 MAX_ENTRIES_PER_SCAN = 4000
 
 
-def scan_data(data_dir, engine, files=None, limit=MAX_ENTRIES_PER_SCAN):
+def scan_data(data_dir, engine, files=None, limit=MAX_ENTRIES_PER_SCAN,
+              standard=None):
     """扫描可编辑字段，返回 ``[{file, path, label, kind, value, name}, ...]``。
 
     ``path`` 是**最终路径**（``%d`` 已替换成真实下标），可以直接交给
     :func:`set_in_data`。
+
+    ``standard`` 是 RGSS 的整数编码偏好（``info['standard']``）：VX Ace 为
+    ``False``（变体），VX/XP 为 ``True``。**不传会让 VX Ace 的数据文件
+    全部读不出来** —— 界面上"一个可编辑字段都没有"，而文件本身完好。
     """
     out = []
     table = MV_FIELD_RULES if engine in ("mv", "mz") else RGSS_FIELD_RULES
@@ -323,7 +334,7 @@ def scan_data(data_dir, engine, files=None, limit=MAX_ENTRIES_PER_SCAN):
         rules = rules_for_file(engine, fname)
         if not rules:
             continue
-        real_name, data = _read_file(engine, data_dir, fname)
+        real_name, data = _read_file(engine, data_dir, fname, standard)
         if data is None:
             continue
         name_field = _NAME_FIELD["mv" if engine in ("mv", "mz") else "rgss"]
@@ -447,10 +458,11 @@ def verify_original(game_info, edits):
         by_file.setdefault(edit.get("file"), []).append(edit)
     engine = game_info.get("engine")
     data_dir = game_info.get("data_dir")
+    standard = game_info.get("standard")
     for fname, items in by_file.items():
         if not fname:
             continue
-        real_name, data = _read_file(engine, data_dir, fname)
+        real_name, data = _read_file(engine, data_dir, fname, standard)
         if data is None:
             continue
         for edit in items:

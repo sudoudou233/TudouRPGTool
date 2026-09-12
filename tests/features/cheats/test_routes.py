@@ -85,11 +85,22 @@ MV_SAVE_DATA = {
 }
 
 
-def make_mv_game(root, gold=1000, item_count=3):
-    """合成一个含存档的 MV 游戏。"""
+def make_mv_game(root, gold=1000, item_count=3, www=False):
+    """合成一个含存档的 MV 游戏。
+
+    ``www=True`` 时用**老版布局**（``www/js`` + ``www/data`` + ``www/save``，
+    真实游戏里很常见，例如 boli3/RJ01052631）；默认是新版布局
+    （``js`` / ``data`` / ``save`` 都在游戏根）。
+
+    两种布局的存档目录不同，而 ``core.engines`` 是按 **js 根**推导
+    ``save_dir`` 的 —— 因此夹具必须跟着布局走，否则会出现
+    "``/saves`` 递归搜索能找到、``/detect`` 却返回空"这种自相矛盾的现象
+    （M3b 实测踩到）。
+    """
     from core.formats import mv_save
 
-    write_text(os.path.join(root, "js", "rpg_core.js"), "// synthetic\n")
+    js_root = os.path.join(root, "www") if www else root
+    write_text(os.path.join(js_root, "js", "rpg_core.js"), "// synthetic\n")
     for fname, payload in (
             ("System.json", {"gameTitle": "合成MV", "currencyUnit": "金币",
                              "optDisplayTp": True, "optExtraExp": False,
@@ -118,15 +129,12 @@ def make_mv_game(root, gold=1000, item_count=3):
             ("States.json", [None, {"id": 1, "name": "中毒", "priority": 50,
                                     "restriction": 0}]),
     ):
-        write_json(os.path.join(root, "data", fname), payload)
+        write_json(os.path.join(js_root, "data", fname), payload)
 
     data = json.loads(json.dumps(MV_SAVE_DATA))
     data["party"]["_gold"] = gold
     data["party"]["_items"]["1"] = item_count
-    # MV 的存档目录是**游戏根下的 save/**（不是 www/save）——
-    # 放错地方 `engines.list_saves` 会找不到（M3b 实测踩到：夹具错了，
-    # 而 /saves 走的是 find_save_dirs 的递归搜索，所以看起来"能用"）
-    save_dir = os.path.join(root, "save")
+    save_dir = os.path.join(js_root, "save")
     os.makedirs(save_dir, exist_ok=True)
     with open(os.path.join(save_dir, "file0.rpgsave"), "wb") as f:
         f.write(mv_save.SaveFileMV._dump(data, "mv"))
@@ -430,12 +438,25 @@ class TestOpenAndSaves(CheatsTestCase):
                   dir=os.path.join(self.root, "game"))
         payload = self.get("/api/cheats/saves")
         self.assertTrue(payload["ok"], payload.get("error"))
+        self.assertEqual(len(payload["saves"]), 1,
+                         "同一个存档被列了多遍（两个来源没去重）：%s"
+                         % [s["path"] for s in payload["saves"]])
         entry = payload["saves"][0]
         for key in ("name", "path", "dir", "size", "time"):
             with self.subTest(key=key):
                 self.assertIn(key, entry)
         self.assertGreater(entry["size"], 0)
         self.assertTrue(entry["time"])
+
+    def test_saves_and_save_dirs_are_deduplicated(self):
+        """存档列表与目录列表都不得出现重复项（两个来源要合并且去重）。"""
+        self.game()
+        self.call("POST", "/api/cheats/open", dir=os.path.join(self.root, "game"))
+        payload = self.get("/api/cheats/saves")
+        paths = [s["path"] for s in payload["saves"]]
+        dirs = payload["save_dirs"]
+        self.assertEqual(len(paths), len(set(paths)), "存档路径重复：%s" % paths)
+        self.assertEqual(len(dirs), len(set(dirs)), "存档目录重复：%s" % dirs)
 
     def test_load_requires_path(self):
         self.call("POST", "/api/cheats/open", dir=self.game())
@@ -480,6 +501,37 @@ class TestOpenAndSaves(CheatsTestCase):
                     "save_dirs", "summary"):
             with self.subTest(key=key):
                 self.assertIn(key, payload)
+
+    def test_old_www_layout_save_dir_is_accepted(self):
+        """**回归**：老版 MV 布局（``www/save/file*.rpgsave``）必须能改档。
+
+        M3b 实测踩到：``open_save`` 的"合法目录"只取
+        ``engines.find_save_dirs`` 的结果，而**空目录不算**；同时
+        ``list_saves`` 只看 ``info['save_dir']``。两者标准不一致会让
+        "列表里有、点开却被拒"或"目录里有存档却列不出来"。
+        真实游戏（如 boli3/RJ01052631）就是这种布局，所以单列一条断言。
+        """
+        directory = os.path.join(self.root, "wwwgame")
+        os.makedirs(directory, exist_ok=True)
+        make_mv_game(directory, www=True)
+        opened = self.call("POST", "/api/cheats/open", dir=directory)
+        self.assertTrue(opened["ok"], opened.get("error"))
+        saves = self.get("/api/cheats/saves")
+        self.assertTrue(saves["saves"], "老布局下的存档没有被列出来")
+        self.assertIn("www", saves["saves"][0]["dir"])
+        self.assertTrue(any("www" in d for d in saves["save_dirs"]),
+                        "save_dirs 里应包含 www/save：%s" % saves["save_dirs"])
+        loaded = self.call("POST", "/api/cheats/load", path=saves["saves"][0]["path"])
+        self.assertTrue(loaded["ok"], loaded.get("error"))
+        self.assertEqual(loaded["party"]["gold"], 1000)
+
+    def test_save_dirs_includes_empty_standard_dir(self):
+        """标准存档目录即使**还没有存档**也要算合法（否则往里存会被拒）。"""
+        directory = self.game()
+        self.call("POST", "/api/cheats/open", dir=directory)
+        service = self.service()
+        standard = os.path.abspath(service.info["save_dir"])
+        self.assertIn(standard, service.save_dirs())
 
 
 class TestOpenAndSavesVXAce(TestOpenAndSaves):
