@@ -5,6 +5,64 @@
 
 ---
 
+## 2026-09-12 ｜ M2b（3/3 之一）：删除 `core/_refbridge.py`，`/api/health` 改报收敛状态
+
+### 改了什么
+
+| 文件 | 变更 |
+| --- | --- |
+| `core/_refbridge.py` | **删除**（M1 引入的临时脚手架，14 项登记） |
+| `tests/unit/test_refbridge.py` | **删除**（13 例，测的是桥接层自身） |
+| `tests/unit/test_engines.py` | 移除 `TestReferenceParity`；`@public` 更新 |
+| `ui/routes.py` | 移除 refbridge 引用；新增 `convergence_status()`；`/api/health` 的 `reference` 段 → **`convergence` 段** |
+| `ui/web/app.js` | 顶栏 chip 由"待收敛参考实现 N"改为"**收敛 x/3**"（`ok` 色表示全部收敛） |
+| `tests/integration/test_startup.py` | 健康检查键列表更新；新增 `test_health_reports_convergence_progress` |
+| `features/translate/manifest.py`、`core/safety/__init__.py` | `@depends` 更新 |
+| `AGENTS.md`、`docs/MODULES.md`、`docs/ROADMAP.md`、`docs/STATE.md` | 同步 |
+
+### 为什么
+
+需求 §3.3 要求三类重复实现各只剩一份。桥接层的存在本身会让"到底还有几份实现"
+变得含糊 —— 它是 M1/M2a 期间为了拿"新实现 vs 旧实现一致性"证据而引入的脚手架，
+收敛完成后必须消失。
+
+### 关键做法：先冻结证据，再删脚手架
+
+直接删桥接层会**连带删掉唯一的等价性证据**（`TestReferenceParity` 依赖它）。
+所以先用独立夹具把结论固化下来（上一个提交 `b3a0ff1`），本提交才动刀。
+夹具不依赖参考工具，任何机器可跑。
+
+### 顺带改进：把"收敛进度"变成可观测事实
+
+原先 `/api/health` 报的是 `reference.pending`（桥接层还剩几项）——
+那是**过程指标**。现在改为 `convergence` 段：
+
+```json
+{"engines": "merged", "formats": "merged", "marshal": "pending", "all_merged": false}
+```
+
+这是需求 §3.3 的**交付指标**本身，而且顶栏直接显示"收敛 x/3"。
+好处：验收者不必读文档就能看到收敛是否完成；文档与运行时会不一致的情况也少了。
+新增 `test_health_reports_convergence_progress` 钉住它。
+
+### 怎么验证
+
+```powershell
+python tests/run_all.py                      # 430 例，0 失败 0 错误
+$env:TUDOU_RPGTOOL_SAMPLES='D:\gamess'
+python tests/run_all.py                      # 300 个真实 .rvdata2 零漂移 + 冻结基线通过
+python tools/check_footprint.py --quiet      # 37 文件，退出码 0
+python app.py --check                        # 退出码 0
+```
+
+实测 `/api/health` 的收敛段：`engines=merged, formats=merged, marshal=pending`。
+
+### 遗留
+
+* `core/marshal/` 仍是两份实现 —— **M2b 只剩这一项**，计划见 `docs/STATE.md` §7.1
+
+---
+
 ## 2026-09-12 ｜ M2b（2/3）：测试去重 + 把"与旧实现等价"的证据冻结为独立夹具
 
 ### 改了什么

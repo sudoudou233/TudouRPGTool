@@ -29,7 +29,7 @@ MANIFEST = {
         "core.textutil",
         "core.formats.mv_mz_data",
         "core.formats.rgss_data",
-        "core.marshal.value_model",
+        "core.marshal.doc_model",
         "core.safety.backup",
         "core.safety.atomic",
     ),

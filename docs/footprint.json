@@ -89,7 +89,7 @@
         "core.textutil",
         "core.formats.mv_mz_data",
         "core.formats.rgss_data",
-        "core.marshal.value_model",
+        "core.marshal.doc_model",
         "core.safety.backup",
         "core.safety.atomic"
       ],
@@ -143,23 +143,6 @@
       "footprint": "docs/ARCHITECTURE.md#core",
       "vendored": false,
       "lines": 34
-    },
-    "core/_refbridge.py": {
-      "feature": "none",
-      "layer": "core",
-      "public": [
-        "ReferenceUnavailable",
-        "load_reference",
-        "reference_status"
-      ],
-      "depends": [
-        "core.paths"
-      ],
-      "tested": "tests/unit/test_refbridge.py",
-      "footprint": "docs/MODULES.md#core_refbridge",
-      "vendored": false,
-      "note": "临时模块。M2b 把 marshal / formats / safety 收敛进本工程后，",
-      "lines": 130
     },
     "core/config.py": {
       "feature": "none",
@@ -495,7 +478,7 @@
       "depends": [
         "core.paths",
         "core.formats",
-        "core.marshal.value_model"
+        "core.marshal"
       ],
       "tested": "tests/unit/test_atomic.py, tests/compat/test_build_backup.py",
       "footprint": "docs/MODULES.md#coresafety",
@@ -777,7 +760,7 @@
       "tested": "tests/unit/test_server.py",
       "footprint": "docs/MODULES.md#uiroutes",
       "vendored": false,
-      "lines": 146
+      "lines": 167
     },
     "ui/server.py": {
       "feature": "none",

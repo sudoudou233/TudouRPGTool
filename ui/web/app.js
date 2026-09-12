@@ -19,6 +19,9 @@ import { $, el, getJSON, toast, escapeHTML } from './dom.js';
 
 const state = { nav: [], pages: [], current: null };
 
+/** 需求 §3.3 要求收敛的三类重复实现（用于顶栏"收敛 x/3"指示）。 */
+const CONVERGENCE_KEYS = ['engines', 'formats', 'marshal'];
+
 /* ------------------------------------------------------------------ 启动 */
 async function boot() {
   bindChrome();
@@ -57,7 +60,14 @@ async function loadHealth() {
       el('span', { class: 'chip', html: `功能 <b>${health.registry?.count ?? 0}</b>` }),
       el('span', { class: 'chip', html: `路由 <b>${health.ui?.routes ?? 0}</b>` }),
       el('span', { class: 'chip', html: `任务 <b>${health.jobs?.running ?? 0}/${health.jobs?.workers ?? 0}</b>` }),
-      el('span', { class: 'chip warn', html: `待收敛参考实现 <b>${health.reference?.pending ?? 0}</b>` }),
+      // M2b 收敛进度：需求 §3.3 要求三类重复实现各只剩一份。
+      // 数据来自 /api/health 的 convergence 段 —— 让"是否收敛完"成为可观测事实，
+      // 而不是只写在文档里。取代原先的"待收敛参考实现"计数（桥接层已删除）。
+      el('span', {
+        class: 'chip ' + (health.convergence?.all_merged ? 'ok' : 'warn'),
+        html: `收敛 <b>${CONVERGENCE_KEYS
+          .filter((k) => health.convergence?.[k] === 'merged').length}/${CONVERGENCE_KEYS.length}</b>`,
+      }),
     );
   } catch (err) {
     $('#app-version').textContent = '无法连接服务';

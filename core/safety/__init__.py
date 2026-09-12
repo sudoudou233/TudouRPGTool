@@ -4,7 +4,7 @@
 @feature  none
 @layer    core
 @public   atomic, backup, builder, fontutil
-@depends  core.paths, core.formats, core.marshal.value_model
+@depends  core.paths, core.formats, core.marshal
 @tested   tests/unit/test_atomic.py, tests/compat/test_build_backup.py
 @footprint docs/MODULES.md#coresafety
 

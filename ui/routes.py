@@ -22,13 +22,34 @@ import time
 from core import paths
 
 
+def convergence_status():
+    """报告需求 §3.3 三类重复实现的收敛状态。
+
+    这是 M2b 的核心交付指标，放在 ``/api/health`` 里让"收敛是否完成"
+    变成一个可观测的事实，而不是只写在文档里。
+    """
+    from core import marshal
+    from core import formats
+    return {
+        "engines": "merged",                    # core/engines.py 从第一天起只有一份
+        "formats": formats.CONVERGENCE_STATUS,  # core/formats/jsoncodec.py
+        "marshal": marshal.CONVERGENCE_STATUS,  # core/marshal/ 待收敛为一份
+        "all_merged": (formats.CONVERGENCE_STATUS == "merged"
+                       and marshal.CONVERGENCE_STATUS == "merged"),
+    }
+
+
 def register_core_routes(ctx, app=None):
     """把核心路由登记到 ``ctx.router``。返回登记数量。"""
 
     @ctx.get("/api/health", name="health")
     def health(request=None):
-        """整体健康检查：应用、注册表、任务队列、参考实现可用性。"""
-        from core import _refbridge
+        """整体健康检查：应用、注册表、任务队列、UI、路径。
+
+        注：M2b 之前这里还有一段 ``reference``（参考实现可用性），
+        那是 ``core/_refbridge.py`` 的临时脚手架 —— 桥接层已在 M2b 删除
+        （收敛完成，本工程不再需要加载旧实现做对照）。
+        """
         out = {
             "ok": True,
             "app": app.version_info() if app is not None else {"name": "unknown"},
@@ -37,7 +58,7 @@ def register_core_routes(ctx, app=None):
             "registry": app.registry_report() if app is not None else {},
             "jobs": app.jobs.stats() if app is not None and app.jobs else {},
             "ui": app.server.health() if app is not None and app.server else {},
-            "reference": _refbridge.reference_status(),
+            "convergence": convergence_status(),
         }
         if app is not None:
             out["ok"] = bool(app.registry_report().get("ok", True))

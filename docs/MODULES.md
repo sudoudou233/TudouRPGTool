@@ -251,16 +251,24 @@ atomic  ←  backup  ←  builder  →  fontutil
 
 ---
 
-## 5. `core/_refbridge.py` —— 临时桥接层（**M2b 后整文件删除**）
+## 5. 收敛状态（需求 §3.3 的三类重复实现）
 
-| 项 | 内容 |
-| --- | --- |
-| 职责 | 按登记表加载参考实现（只用于**回归对照**；生产路径不依赖它） |
-| 公开 API | `REFERENCES`（12 项）、`ReferenceUnavailable`、`load_reference()`、`reference_status()`、`pending_references()` |
-| 为什么存在 | M2a/M2b 期间需要"新实现 vs 旧实现"的一致性证据（如引擎识别在 7 个真实游戏上 100% 一致、marshal 300 文件零漂移） |
-| 安全设计 | `load_reference()` 拒绝未登记的名字 → 无法随手 import 绕过登记表 |
-| 当前 `pending` | 12 项（`/api/health` 的 `reference.pending` 会显示） |
-| 消除时机 | M2b 收敛完成后，`pending == 0`，删除本文件 |
+> 由 `/api/health` 的 `convergence` 段实时报告；这里说明各自的收敛方式与守护测试。
+
+| 职责 | 真源 | 状态 | 守护测试 |
+| --- | --- | --- | --- |
+| 引擎识别 + 目录/存档发现 | `core/engines.py` | ✅ **merged**（从 M1 第一天起就只有一份，未经历"两份再合并"） | `tests/unit/test_engines.py`：`TestFrozenDetectionFixtures`（13 种判据组合，两套 MV/MZ 判据都覆盖）+ `TestFrozenRealGameBaseline`（7 个真实游戏，需 `TUDOU_RPGTOOL_SAMPLES`） |
+| MV/MZ 编解码（JSON / 压缩 / 加密包装 / JsonEx 元数据） | `core/formats/jsoncodec.py` | ✅ **merged**（M2b 抽出，`CONVERGENCE_STATUS == "merged"`） | `tests/unit/test_jsoncodec.py::TestConvergence`（静态断言禁止第二份 `base64.b64decode` / 密钥派生 / `zlib` 调用） |
+| Ruby Marshal | `core/marshal/` | ⬜ **pending**（仍有 `doc_model` + `value_model` 两份） | `tests/compat/test_marshal_compat.py`（300 真实样本零漂移）+ `test_standard_mode.py`（合成 VX/XP） |
+
+**`core/_refbridge.py` 已删除**（M2b）：它曾是 M1/M2a 的临时脚手架，
+用于在收敛期间加载旧实现做对照。删除前先把等价性证据**冻结为不依赖参考工具的夹具**
+（上表前两行的守护测试），因此删除没有丢证据。
+`/api/health` 的 `reference` 段随之被 `convergence` 段取代 ——
+让"收敛是否完成"成为可观测事实，而不是只写在文档里。
+
+**保留**：`core/paths.py` 的 `reference_root()` / `reference_tools()` /
+`reference_available()` —— 它们与桥接层无关，是"参考目录在哪"的可配置项。
 
 ---
 
@@ -271,6 +279,7 @@ atomic  ←  backup  ←  builder  →  fontutil
 | `core/constants.py`、`core/paths.py`、`core/engines.py`、`core/registry.py`、`core/context.py` | **全部**（改这些 = 全局变更，必须跑全量测试） |
 | `core/safety/atomic.py` | 全部写回路径（数据安全） |
 | `core/jobs.py`、`ui/server.py`、`ui/web/dom.js` | 全部长任务与页面 |
+| `core/formats/jsoncodec.py` | MV/MZ 两条路径（游戏数据 + 存档） |
 | `core/formats/mv_mz_data.py`、`rgss_data.py`、`core/textutil.py` | 仅 `translate` |
 | `core/formats/mv_save.py`、`rgss_save.py`、`core/marshal/` | 仅 `cheats`（`marshal` 也被 `translate` 的 RGSS 数据路径使用） |
-| `core/safety/backup.py`、`fontutil.py` | 仅 `translate` |
+| `core/safety/backup.py`、`builder.py`、`fontutil.py` | 仅 `translate` |

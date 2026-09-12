@@ -7,9 +7,9 @@
 
 ## 1. 一句话状态
 
-**M2b 进行中（1/3 完成）**：MV/MZ 的 **formats 层已收敛为一份**（`jsoncodec.py`），
-493 个测试全绿、足迹校验与启动自检通过。
-**剩余**：marshal 收敛为一份（ADR-004）、消除 `_refbridge.py`。
+**M2b 进行中（2/3 完成）**：MV/MZ 的 **formats 层已收敛为一份**（`jsoncodec.py`），
+**`_refbridge.py` 已删除**（其"与旧实现等价"的证据已冻结为不依赖参考工具的夹具），
+测试已去重。**剩余**：marshal 收敛为一份（ADR-004）。
 **下一步：marshal 收敛。**
 
 ---
@@ -21,7 +21,7 @@
 | M0 现状测绘 | ✅ 完成 | 每条功能都有"原位置 → 新位置"映射 | `docs/M0-现状测绘.md`、`docs/迁移对照表.md`（99 条映射） |
 | M1 骨架与足迹 | ✅ 完成 | 空壳可启动，足迹校验通过 | `python app.py --check` 退出码 0；足迹校验 0 错误 |
 | M2a 可信基线 + P0 修复 | ✅ 完成 | 测试可一键跑且退出码可信；P0 缺陷有回归断言 | 458 例 0 失败；5 个 P0 + 4 个 P1 已修；合成 VX/XP 样本覆盖 B-10 活路径 |
-| **M2b core 收敛** | 🔄 **进行中（1/3）** | 三类职责各只有一份实现 | ✅ **formats 已收敛**（`CONVERGENCE_STATUS == "merged"`）<br>⬜ marshal 未收敛<br>⬜ `_refbridge` 未消除 |
+| **M2b core 收敛** | 🔄 **进行中（2/3）** | 三类职责各只有一份实现 | ✅ **formats 已收敛**（`CONVERGENCE_STATUS == "merged"`）<br>✅ **`_refbridge` 已删除**（证据冻结为夹具）<br>⬜ marshal 未收敛 |
 | M3a 翻译功能接入 | ⬜ 未开始 | 扫描→翻译→生成汉化版→还原 全链路走通 | — |
 | M3b 修改功能接入 | ⬜ 未开始 | 5 类存档读写改回读在界面走通 | — |
 | M4 UI 统一 | ⬜ 未开始 | UI 审查通过，无孤立样式 | — |
@@ -231,32 +231,31 @@ python app.py --check                        # 退出码 0
 * `ObjectNode.ivars` 是 **`(Symbol 节点, 值节点)` 的列表**，不是 dict
 * 标准模式下单字节整数上限是 **117**（不是 122，见 N-10）
 
-### 7.2 消除 `core/_refbridge.py`（证据已冻结，可机械执行）
+### 7.2 消除 `core/_refbridge.py`（✅ **已完成**）
 
-**前置动作已完成（2026-09-12）**：把桥接层承担的"与旧实现等价"证据
-**固化为不依赖参考工具的夹具**，避免删桥接层时连带删掉证据：
+**证据冻结**（2026-09-12）：把桥接层承担的"与旧实现等价"证据固化为
+**不依赖参考工具**的夹具，避免删桥接层时连带删掉证据：
 
 | 冻结内容 | 位置 | 覆盖 |
 | --- | --- | --- |
 | 真实游戏基线 | `tests/unit/test_engines.py::TestFrozenRealGameBaseline` | 7 个真实游戏的引擎判定 + 存档数量（含"未识别"一例），与**两个**旧实现比对过 |
-| 判据覆盖矩阵 | `tests/unit/test_engines.py::TestFrozenDetectionFixtures` | 13 种标记文件组合 —— **两套 MV/MZ 判据都覆盖**（`*_core.js` 与 `*_managers.js`），外加 www 布局、System.json 兜底、RVGSS 三档、2000/2003、未识别 |
+| 判据覆盖矩阵 | `tests/unit/test_engines.py::TestFrozenDetectionFixtures` | 13 种标记文件组合 —— **两套 MV/MZ 判据都覆盖**（`*_core.js` 与 `*_managers.js`），外加 www 布局、System.json 兜底、RGSS 三档、2000/2003、未识别 |
 | 能力提升断言 | 同上 `test_vx_is_supported_unlike_translation_tool` | 旧翻译工具识别不出 VX，本实现必须支持 |
 
-**剩余步骤**（机械执行即可）：
+**删除动作（已完成）**：
 
-1. 删除 `tests/unit/test_refbridge.py`（13 例，测的是桥接层自身）
-2. `ui/routes.py`：移除 `from core import _refbridge` 与 `/api/health` 的 `reference` 段
-3. `ui/web/app.js`：移除顶栏"待收敛参考实现"chip
-4. `tests/unit/test_server.py` / `tests/integration/test_startup.py`：
-   健康检查的键列表里去掉 `reference`
-5. `tests/unit/test_engines.py::TestReferenceParity` 两个方法删除
-   （合成对照已被冻结矩阵取代）
-6. 删除 `core/_refbridge.py`；`features/translate/manifest.py` 与
-   `core/safety/__init__.py` 的 `@depends` 行去掉相关引用
-7. `docs/MODULES.md` 的 `core/_refbridge.py` 段整段删除；
-   `docs/ARCHITECTURE.md` §4.4 与 §3 依赖图更新
+* ✅ 删除 `tests/unit/test_refbridge.py`（13 例）与 `core/_refbridge.py`
+* ✅ `ui/routes.py`：移除 refbridge 引用；`/api/health` 的 `reference` 段
+  **替换为 `convergence` 段** —— 直接报告需求 §3.3 三类职责的收敛状态
+  （`engines` / `formats` / `marshal` + `all_merged`），让"收敛是否完成"
+  成为**可观测事实**而不是只写在文档里
+* ✅ `ui/web/app.js`：顶栏 chip 由"待收敛参考实现 N"改为"**收敛 x/3**"
+* ✅ `tests/integration/test_startup.py`：健康检查键列表与新增
+  `test_health_reports_convergence_progress`
+* ✅ 删除 `TestReferenceParity`（其真实样本等价性已由冻结基线承担）
+* ✅ `features/translate/manifest.py` / `core/safety/__init__.py` 的 `@depends` 更新
 
-**注意**：`paths.reference_root()` / `reference_available()` 等路径工具**保留** ——
+**保留项**：`paths.reference_root()` / `reference_available()` 等路径工具**保留** ——
 它们与桥接层无关，是"参考目录在哪"的配置，删掉会失去可配置性。
 
 ### 7.3 测试去重（**已完成**）
@@ -286,10 +285,8 @@ python app.py --check                        # 退出码 0
 | 临时状态 | 消除时机 | 验收判据 |
 | --- | --- | --- |
 | `core/marshal/` 有**两份实现**（`doc_model` + `value_model`） | M2b 剩余 | 两侧 roundtrip 断言同时通过；`core/marshal/` 下只剩一份二进制实现 |
-| `core/_refbridge.py` 桥接层（14 项登记） | M2b 剩余 | 整文件删除；`/api/health` 的 `reference` 段调整；`test_refbridge.py` 删除 |
 | `features/translate/translators.py`、`session.py` 是 vendored 代码 | M3a | 接线为正式模块并接入 UI |
 | 两个功能页都是**骨架**（`status: skeleton`） | M3a / M3b | 两条回归链路在界面走通 |
-| ~~`tests/unit/test_misc.py` 与 `test_config.py` 重复导出~~ | ✅ M2b 已去重 | `test_misc.py` 已删除，用例各归其位（unit 层"371 含重复" → **322 真实**） |
 
 **M2b 已完成的部分**：
 
@@ -298,6 +295,11 @@ python app.py --check                        # 退出码 0
   `CONVERGENCE_STATUS` 已置 `"merged"`；由
   `tests/unit/test_jsoncodec.py::TestConvergence` 静态断言守护
   （禁止再出现第二份 `base64.b64decode` / 密钥派生 / `zlib` 调用）
+* ✅ **`_refbridge.py` 已删除**：等价性证据冻结为
+  `TestFrozenRealGameBaseline`（7 个真实游戏）与
+  `TestFrozenDetectionFixtures`（13 种判据组合，两套 MV/MZ 判据都覆盖）；
+  `/api/health` 改为报告 `convergence` 状态
+* ✅ **测试去重**：`test_misc.py` 已删除，用例各归其位
 
 **M2a 已清掉的临时状态**（留档）：
 

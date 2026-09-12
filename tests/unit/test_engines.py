@@ -3,7 +3,8 @@
 
 @feature  none
 @layer    tests
-@public   TestEngineDetection, TestSaveDiscovery, TestReferenceParity
+@public   TestEngineDetection, TestSaveDiscovery, TestConstants,
+          TestFrozenRealGameBaseline, TestFrozenDetectionFixtures
 @depends  core.engines, core.constants
 @tested   (本文件即测试)
 @footprint docs/MODULES.md#coreengines
@@ -431,70 +432,6 @@ class TestFrozenDetectionFixtures(unittest.TestCase):
         purposes = " ".join(p for _l, _f, _e, p in FROZEN_DETECTION_FIXTURES)
         self.assertIn("修改工具的判据", purposes)
         self.assertIn("翻译工具的判据", purposes)
-
-
-class TestReferenceParity(unittest.TestCase):
-    """与两个旧实现的判定一致性（需要参考工具目录；缺失则跳过）。
-
-    ⚠ M2b 之后本类会被移除（`_refbridge.py` 一并删除）——
-    真实样本上的等价性已由 ``TestFrozenRealGameBaseline`` 独立承担，
-    判据覆盖由 ``TestFrozenDetectionFixtures`` 独立承担。
-    """
-
-    def setUp(self):
-        from core import _refbridge, paths
-        if not paths.reference_available("cheats"):
-            self.skipTest("参考工具目录不可用，跳过对照")
-        self.refbridge = _refbridge
-        self.tmp = tempfile.TemporaryDirectory(prefix="parity_")
-        self.addCleanup(self.tmp.cleanup)
-        self.root = self.tmp.name
-
-    def test_agree_with_cheating_tool_detector(self):
-        try:
-            ref = self.refbridge.load_reference("engines")
-        except Exception as exc:
-            self.skipTest("无法加载参考实现：%s" % exc)
-
-        cases = {
-            "mz_core": ["js/rmmz_core.js", "data/System.json"],
-            "mv_core": ["js/rpg_core.js", "data/System.json"],
-            "vxace": ["Data/Items.rvdata2"],
-            "xp": ["Data/Items.rxdata"],
-            "unknown": [],
-        }
-        for label, files in cases.items():
-            with self.subTest(case=label):
-                sub = os.path.join(self.root, label)
-                os.makedirs(sub, exist_ok=True)
-                make_game(sub, files)
-                mine = engines.detect(sub)["engine"]
-                theirs = (ref.detect_engine(sub) or {}).get("engine")
-                self.assertEqual(mine, theirs,
-                                 "与修改工具判定不一致：%s vs %s" % (mine, theirs))
-
-    def test_agree_with_translation_tool_detector(self):
-        try:
-            ref = self.refbridge.load_reference("tool.engines")
-        except Exception as exc:
-            self.skipTest("无法加载参考实现：%s" % exc)
-
-        cases = {
-            "mz_managers": ["js/rmmz_managers.js", "data/System.json"],
-            "mv_managers": ["js/rpg_managers.js", "data/System.json"],
-            "vxace": ["Data/Items.rvdata2"],
-            "xp": ["Data/Items.rxdata"],
-        }
-        for label, files in cases.items():
-            with self.subTest(case=label):
-                sub = os.path.join(self.root, label)
-                os.makedirs(sub, exist_ok=True)
-                make_game(sub, files)
-                mine = engines.detect(sub)["engine"]
-                info = ref.detect(sub)
-                theirs = info.get("engine") if info.get("engine") else None
-                self.assertEqual(mine, theirs,
-                                 "与翻译工具判定不一致：%s vs %s" % (mine, theirs))
 
 
 if __name__ == "__main__":

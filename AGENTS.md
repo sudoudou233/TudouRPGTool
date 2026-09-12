@@ -1,7 +1,7 @@
 # AGENTS.md —— 给下一个 AI 的开工指令
 
 > 本文件是**接手本工程的第一入口**。读完本文件 + `docs/STATE.md`，你就能开始工作。
-> 最后更新：**M2a 完成时**。
+> 最后更新：**M2b（2/3）完成时**。
 
 ---
 
@@ -173,14 +173,16 @@ python tests/run_all.py --suite compat
 `M0 现状测绘`（✅）→ `M1 骨架与足迹`（✅）→ `M2a 可信基线 + P0 修复`
 → `M2b core 收敛` → `M3a 翻译接入` → `M3b 修改接入` → `M4 UI 统一` → `M5 验收硬化`
 
-**M2a 结束时仍存在的临时状态**（下一个 AI 必须知道）：
+**M2b（2/3）结束时仍存在的临时状态**（下一个 AI 必须知道）：
 
 * `core/marshal/` 里**有两份实现**（`doc_model` 与 `value_model`）——临时状态，
   M2b 收敛为一份（方向见 **ADR-004**）。验收硬指标：两侧 roundtrip 断言同时通过。
-* `core/_refbridge.py` 是**临时桥接层**（14 项登记），用于加载参考实现做对照。
-  收敛完成后整个文件删除。
-* `core/formats/` 尚未抽出共享的 `jsoncodec.py`（MV/MZ 游戏数据与存档各写一套
-  JSON / 压缩约定）——M2b 收敛。
+* ~~`core/_refbridge.py`~~ **已在 M2b 删除**。它的"与旧实现等价"证据已冻结为
+  `tests/unit/test_engines.py` 的 `TestFrozenRealGameBaseline`（7 个真实游戏）
+  与 `TestFrozenDetectionFixtures`（13 种判据组合，两套 MV/MZ 判据都覆盖）。
+* ~~`core/formats/` 尚未抽出共享的 `jsoncodec.py`~~ **已在 M2b 抽出**：
+  MV/MZ 两条路径共用一份 JSON / 压缩 / 加密包装实现，
+  `core/formats/__init__.py` 的 `CONVERGENCE_STATUS == "merged"`。
 * `features/translate/translators.py` 与 `session.py` 是 vendored 代码，
   M3a 接线为正式模块；两个功能页仍是骨架（`status: skeleton`）。
 

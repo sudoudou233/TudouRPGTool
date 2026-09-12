@@ -52,10 +52,24 @@ class TestStartup(unittest.TestCase):
     def test_health_full_shape(self):
         payload = get(self.url + "api/health")
         for key in ("ok", "app", "python", "platform", "registry", "jobs",
-                    "ui", "reference"):
+                    "ui", "convergence"):
             with self.subTest(key=key):
                 self.assertIn(key, payload)
         self.assertTrue(payload["ok"])
+
+    def test_health_reports_convergence_progress(self):
+        """需求 §3.3 的收敛进度必须是可观测事实（不是只写在文档里）。
+
+        M2b 之前这里查的是 ``reference.pending``（桥接层待收敛项数）；
+        桥接层已删除，改查 ``convergence`` 段。
+        """
+        payload = get(self.url + "api/health")
+        convergence = payload["convergence"]
+        for engine_family in ("engines", "formats", "marshal"):
+            with self.subTest(family=engine_family):
+                self.assertIn(engine_family, convergence)
+                self.assertIn(convergence[engine_family], ("merged", "pending"))
+        self.assertIsInstance(convergence["all_merged"], bool)
 
     def test_all_features_register_and_are_healthy(self):
         payload = get(self.url + "api/features")
