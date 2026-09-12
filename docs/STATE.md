@@ -30,8 +30,8 @@
 | **M2b core 收敛** | ✅ **完成** | 三类职责各只有一份实现 | `all_merged == true`；`value_model.py` 与 `_refbridge.py` 已删除 |
 | **M3a 翻译功能接入** | ✅ **完成** | 扫描→翻译→生成汉化版→还原 全链路走通 | 17 个端点 + 五张卡片 + MV/VX Ace 端到端构建写回还原 + 真实 HTTP 烟测 |
 | **M3b 修改功能接入** | ✅ **完成** | 5 类存档读写改回读在界面走通 | 18 个端点 + 六张卡片 + MV/VX Ace 端到端改档写回还原 + 数据表编辑（34 个字段规则） |
-| M4 UI 统一 | ⬜ 未开始 | UI 审查通过，无孤立样式 | 两个页面已共用令牌与组件；跨页审查待做 |
-| M5 验收硬化 | ⬜ 未开始 | 需求 §8 的 8 项全过 | — |
+| **M4 UI 统一** | ✅ **完成（机械部分）** | UI 审查通过，无孤立样式 | `tests/integration/test_ui_consistency.py`（18 例）：3 个页面共 31 个类全部来自 `components.css`、无硬编码色值、令牌引用全部已定义、响应式成因已钉住；**人工走查步骤见 `docs/UI_SPEC.md` §7.1** |
+| **M5 验收硬化** | 🔄 **进行中** | 需求 §8 的 8 项全过 | ✅ 1 启动（`启动.bat` + `run.py` 实测起服务并 200）/ ✅ 2 翻译回归（4 引擎全过）/ ✅ 3 修改回归（5 格式全过）/ ✅ 4 无损性 / ✅ 5 安全性 / ✅ 6 扩展性（新增 `selfcheck` 功能，外壳零改动）/ ✅ 7 足迹（3 分钟可说清 + 校验通过）/ ✅ 8 UI（机械部分）；⬜ README 已写、待最后一遍通读；⬜ 人工走查 |
 
 ---
 
@@ -44,6 +44,7 @@
 | --- | --- | --- | --- | --- |
 | `translate` | 文本翻译 | `ui/web/pages/translate.js` | `features/translate/manifest.py` → `routes.register_routes` | `core/formats/mv_mz_data.py`、`core/formats/rgss_data.py`、`core/safety/builder.py`、`core/safety/backup.py`、`features/translate/translators.py` |
 | `cheats` | 存档修改 | `ui/web/pages/cheats.js` | `features/cheats/manifest.py` → `routes.register_routes` | `core/formats/mv_save.py`、`core/formats/rgss_save.py`、`features/cheats/data_fields.py`、`core/marshal/` |
+| `selfcheck` | 环境自检 | `ui/web/pages/selfcheck.js` | `features/selfcheck/manifest.py` → `register(ctx)`（单端点，不拆 routes） | `features/selfcheck/manifest.py`（只读，无 core 写回路径） |
 
 **跨功能的公共地基**（改这些会影响所有功能，务必先读 `docs/MODULES.md`）：
 
@@ -228,18 +229,19 @@ M2b 的 marshal 收敛完成后，把 `rgss_data.py` 切到 `value_layer`。**VX
 ## 6. 当前测试状态
 
 ```powershell
-python tests/run_all.py                      # 791 例，0 失败 0 错误
+python tests/run_all.py                      # 867 例，0 失败 0 错误
 python tests/run_all.py --quiet              # 退出码 0
-python tools/check_footprint.py --quiet      # 退出码 0（41 文件 / 2 功能）
-python app.py --check                        # 退出码 0（45 条路由）
+python tools/check_footprint.py --quiet      # 退出码 0（43 文件 / 3 功能）
+python app.py --check                        # 退出码 0（46 条路由）
+启动.bat                                     # 双击启动（等价于 python run.py）
 ```
 
 | 测试层 | 用例数 | 说明 |
 | --- | --- | --- |
 | `unit/` | ~320 | 纯单元，零外部依赖（含 `test_sysdialog.py` 的 23 例） |
 | `compat/` | ~100 | 原两个工具断言的可迁移版本 + **缺陷回归**（B-02/B-03/B-10/N-07…）+ **合成 VX/XP 样本** |
-| `features/` | ~250 | 两个功能模块的自有测试（translate ~116 + cheats ~135） |
-| `integration/` | ~73 | 启动服务后的端到端链路 + 零第三方依赖扫描 + Python 3.8 语法扫描 + **两个页面的静态契约 43 例** |
+| `features/` | ~285 | 三个功能模块的自有测试（translate ~116 + cheats ~153 + selfcheck 16） |
+| `integration/` | ~99 | 端到端链路 + 零第三方依赖扫描 + 3.8 语法扫描 + 页面静态契约（43）+ **UI 统一性（18）** + **启动入口（16）** + **验收回归（17）** |
 | `local/` | 0（待补） | 真实样本层，靠 `TUDOU_RPGTOOL_SAMPLES` 指定；样本不入库 |
 
 **M3b 新增的测试重点**：
@@ -294,29 +296,18 @@ python app.py --check                        # 退出码 0（45 条路由）
 * **F-09 违规**：`features/translate/routes.py` 曾反向 import `ui.native_pick`
   → 对话框能力下沉到 `core/sysdialog.py`（分层是硬约束，见 `docs/MODULES.md`）
 
-### 7.2 下一步：M4 UI 统一，然后 M5 验收硬化
+### 7.2 下一步：M5 收尾
 
-**M4（跨页视觉与交互统一）** —— 两个页面已经共用 `tokens.css` 与
-`components.css`，剩下的是一次审查：
+M4 的机械部分与 M5 的 8 项均已落地（见 §2）。剩下的是**收尾与通读**：
 
 | # | 任务 | 判据 |
 | --- | --- | --- |
-| 1 | 走一遍 `docs/UI_SPEC.md` §7 的 7 条审查清单 | 全部打勾 |
-| 2 | 1280×720 / 1440×900 / 1920×1080 三档窗口实际看一眼 | 无布局错乱、无横向滚动（表格除外） |
-| 3 | 两页的"任务进度 / 空状态 / 错误提示"措辞与形态对齐 | 同类情况同一表现 |
-| 4 | 把审查结果写回 `docs/UI_SPEC.md` §7 | 清单变成"已过"并注明日期 |
+| 1 | 通读 `README.md`，确认照着做能跑通 | 至少实际执行一遍"双击启动 → 两个功能各做一次操作" |
+| 2 | `docs/UI_SPEC.md` §7.1 的人工走查 | 三档窗口各看一遍，把结论写回该表 |
+| 3 | `docs/迁移对照表.md` 的 ⬜/⚠️ 条目逐条收口 | B-16/B-17 已在 M3b 补断言；B-19（队伍成员只读）已标注等价 |
+| 4 | 需求 §9 的"已知变体"清单 | 加密 JSON 包装、非标准 marshal、多流存档、额外字段 —— 已全部处理并各有回归 |
 
-**M5（验收硬化）** —— 需求 §8 的 8 项 + 交付物：
-
-| # | 任务 | 备注 |
-| --- | --- | --- |
-| 1 | 需求 §8 的 8 项逐条核对并留证据 | 见需求文档；每条对应到具体命令与输出 |
-| 2 | `README.md`（面向使用者：怎么启动、两个功能怎么用、出了事怎么还原） | **尚未创建** |
-| 3 | 启动器（`启动.bat` 之类的双击入口） | **尚未创建**；要处理"Python 不在 PATH"的提示 |
-| 4 | MZ / XP 的真实样本端到端（现在只有合成样本） | 用 `TUDOU_RPGTOOL_SAMPLES` |
-| 5 | `docs/迁移对照表.md` 的 ⬜/⚠️ 条目逐条收口 | B-16/B-17 已在 M3b 补齐测试 |
-
-### 7.3 必须遵守的既有约束（M2a/M2b/M3a/M3b 建立）
+### 7.3 必须遵守的既有约束（M2a ～ M5 建立）
 
 * **写回一律走 `core/safety/atomic.py`** —— 由 `test_m2a_regressions.py` 与
   `test_writeback_regressions.py` 的 AST 扫描强制（禁止写模式 `open`，覆盖
@@ -356,10 +347,10 @@ MV / MZ / VX Ace / XP **各至少 1 个样本**走完：
 
 | 引擎 | 翻译链路 | 修改链路 | 备注 |
 | --- | --- | --- | --- |
-| MV | ✅ 合成样本（进 CI）+ ✅ 真实样本扫描 | ✅ 合成样本（进 CI） | 真实样本的**构建**待 M5 |
-| VX Ace | ✅ 合成样本（进 CI）+ ✅ 真实样本扫描 | ✅ 合成样本（进 CI） | 真实样本的**构建**待 M5 |
-| MZ | ⬜ 只有真实样本**扫描** | ⬜ 无夹具 | 待 M5 |
-| XP / VX | ⬜ `standard=True` 的往返已覆盖（合成） | ⬜ 无夹具 | 待 M5 |
+| MV | ✅ 合成样本（进 CI）+ ✅ 真实样本扫描 | ✅ 合成样本（进 CI） | MV/MZ 的 JSON 结构一致，差异只在标记文件与压缩 |
+| VX Ace | ✅ 合成样本（进 CI）+ ✅ 真实样本扫描 | ✅ **真实样本**（`test_acceptance.py` 用真实存档跑完改档→保存→还原） | 真实样本是 **2 流存档**（N-19 的现场） |
+| MZ | ✅ 合成样本（进 CI）+ ✅ 真实样本扫描 | ✅ 合成样本（进 CI） | 真实 MZ 样本只有扫描覆盖 |
+| XP / VX | ✅ 合成样本（`standard=True`，进 CI） | ✅ 合成样本（进 CI） | 本机没有真实 XP/VX 游戏（M0 已登记为空白） |
 
 用 `TUDOU_RPGTOOL_SAMPLES` 指向真实样本；**样本不入库**（ADR-005）。
 
@@ -368,11 +359,11 @@ MV / MZ / VX Ace / XP **各至少 1 个样本**走完：
 | 临时状态 | 消除时机 | 验收判据 |
 | --- | --- | --- |
 | `features/translate/translators.py`、`session.py` 是 vendored 代码（保留了原实现的结构与注释） | M5 视情况整理 | 行为由 `test_routes.py` / `test_scan_regressions.py` 覆盖；整理时必须保持 4 个适配器与去重翻译语义不变 |
-| `README.md` 与双击启动器**尚未创建** | M5 | 交付物清单要求（需求 §9/§10） |
-| 页面尚未做跨页视觉统一审查 | M4 | `docs/UI_SPEC.md` §7 的 7 条清单全过 |
+| 1280×720 等窗口的**观感**尚未人工确认 | M5 收尾 | `docs/UI_SPEC.md` §7.1 的走查步骤做完；成因已由 `test_ui_consistency.py` 钉住 |
+| Python 3.8 兼容性只有**静态语法扫描**（本机只有 3.10.9） | 无法消除 | `tests/integration/test_startup.py` 的 3.8 语法扫描 + 手工避免 3.9+ 语法；`run.py` 会拒绝 < 3.8 |
 | `ctx.translate_service` / `ctx.cheats_service` 是为测试/调试页暴露的服务实例 | 保留（已文档化） | 生产代码不得依赖它们；两个 `register_routes` 的 docstring 已声明 |
-| MZ / XP 的端到端只在合成样本或只读链路上覆盖 | M5 | 用 `TUDOU_RPGTOOL_SAMPLES` 的真实样本各跑一遍（§7.4 表） |
-| 前端只在浏览器里可验证（无前端测试框架，因零第三方依赖） | 保留 | 以 `test_translate_page.py` / `test_cheats_page.py` 的**静态契约**替代；新增页面照写一份 |
+| 前端只在浏览器里可验证（无前端测试框架，因零第三方依赖） | 保留 | 以页面静态契约（43 例）+ UI 统一性（18 例）替代；新增页面照写一份 |
+| MZ / XP 的端到端里 MZ 用合成数据（真实 MZ 样本只有扫描覆盖） | 无法完全消除 | MV/MZ 的 JSON 结构一致，差异只在标记文件与压缩方式，两者都已覆盖 |
 
 **M2b 已完成的部分（全部）**：
 

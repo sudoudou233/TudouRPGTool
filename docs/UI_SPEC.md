@@ -93,6 +93,7 @@
 | --- | --- | --- | --- | --- |
 | `translate` | 文本翻译 | `ui/web/pages/translate.js` | `features/translate` | **已接线**（M3a）：选目录 → 扫描 → 列表编辑 → 批量翻译 → 生成汉化版 → 备份还原 |
 | `cheats` | 存档修改 | `ui/web/pages/cheats.js` | `features/cheats` | **已接线**（M3b）：选目录 → 选存档 → 改数值 → 保存 → 数据表编辑 → 备份还原 |
+| `selfcheck` | 环境自检 | `ui/web/pages/selfcheck.js` | `features/selfcheck` | **已接线**（M5）：运行环境 / 装配结果 / 收敛状态 / 能力边界（需求 §8-6 的扩展性演示） |
 
 页面模块契约：必须 `export function render(host, ctx)`（可为 async）。
 `host` 是已清空的容器元素；`ctx` 含 `{nav, features}`。
@@ -183,10 +184,33 @@
 
 ## 7. UI 审查清单（M4 用）
 
-- [ ] 所有页面只使用 `components.css` 的类，无孤立样式
-- [ ] 没有页面自定颜色（全部走令牌）
-- [ ] 导航由 `/api/nav` 驱动，新增功能无需改外壳
-- [ ] 每个长任务都有进度 + 取消
-- [ ] 每个破坏性操作都有二次确认且写明备份位置
-- [ ] 错误提示是中文可读文本
-- [ ] 1280×720 下无横向滚动条（表格除外）
+机械可查的部分已由 `tests/integration/test_ui_consistency.py`（18 例）覆盖；
+剩下需要"真的看一眼"的部分列在 §7.1。
+
+| # | 检查项 | 结论 | 依据 |
+| --- | --- | --- | --- |
+| 1 | 所有页面只使用 `components.css` 的类，无孤立样式 | ✅ | `test_every_class_used_is_defined`（3 个页面共 31 个类，全部已定义） |
+| 2 | 没有页面自定颜色（全部走令牌） | ✅ | `test_no_hardcoded_colours_in_pages` + `test_every_token_used_is_defined` |
+| 3 | 导航由 `/api/nav` 驱动，新增功能无需改外壳 | ✅ | `tests/features/selfcheck/test_manifest.py::TestExtensibilityProof`（§8-6 现场加了第三个功能，外壳零改动） |
+| 4 | 每个长任务都有进度 + 取消 | ✅ | `test_long_tasks_use_the_shared_job_ui` + `test_translate_page.py` / `test_cheats_page.py` |
+| 5 | 每个破坏性操作都有二次确认且写明备份位置 | ✅ | 两个页面的契约测试（覆盖/保存/还原/写数据表共 5 处） |
+| 6 | 错误提示是中文可读文本 | ✅ | `test_error_messages_are_chinese` |
+| 7 | 1280×720 下无横向滚动条（表格除外） | ⚠️ **需人工** | 见 §7.1；成因已在 §6 与 `TestResponsiveness` 中钉住 |
+
+### 7.1 需要人工走查的部分（无法在无浏览器的 CI 里量像素）
+
+`TestResponsiveness` 已经把"会不会错乱"的**成因**钉住了（栅格 `auto-fit`、
+`.row` 换行、表格 `overflow:auto` + `max-height`、模态框 `max-width: min()`、
+容器不写死像素宽度），但**最终观感**仍需一次人工确认。走查步骤：
+
+1. `python app.py --no-browser`，浏览器打开提示的地址；
+2. 依次切换三个页面（文本翻译 / 存档修改 / 环境自检）；
+3. 用开发者工具的设备工具栏依次切到 **1280×720 / 1440×900 / 1920×1080**，
+   每档确认：
+   - 顶栏与导航不换行错位；
+   - 页面**没有横向滚动条**（表格内部滚动是允许的）；
+   - 卡片内两列表单在窄档降为单列（`.grid` 的 `auto-fit` 生效）；
+   - 弹窗（二次确认）不超出视口；
+   - Toast 出现在右下角且不遮挡操作按钮。
+4. 若发现错乱，**先改 `components.css` 的令牌/组件**，不要在页面里写内联样式
+   （`test_no_page_defines_its_own_style_block` 会拦住后者）。

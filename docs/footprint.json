@@ -81,6 +81,37 @@
       "manifest": "features/cheats/manifest.py",
       "tests": "tests/features/cheats"
     },
+    "selfcheck": {
+      "id": "selfcheck",
+      "name": "环境自检",
+      "icon": "检",
+      "version": "1.0.0",
+      "description": "显示运行环境与装配结果：Python 版本、功能清单、路由数、三类收敛状态、真实样本可用性。",
+      "order": 90,
+      "core_deps": [
+        "core.paths",
+        "core.registry",
+        "core.constants",
+        "core.engines",
+        "core.marshal",
+        "core.formats",
+        "core.safety"
+      ],
+      "api_prefix": "/api/selfcheck",
+      "pages": [
+        {
+          "id": "selfcheck",
+          "title": "环境自检",
+          "icon": "检",
+          "module": "selfcheck",
+          "order": 90
+        }
+      ],
+      "enabled": true,
+      "directory": "features/selfcheck",
+      "manifest": "features/selfcheck/manifest.py",
+      "tests": "tests/features/selfcheck"
+    },
     "translate": {
       "id": "translate",
       "name": "文本翻译",
@@ -674,6 +705,39 @@
       "footprint": "docs/FEATURES.md#cheats",
       "vendored": false,
       "lines": 760
+    },
+    "features/selfcheck/__init__.py": {
+      "feature": "selfcheck",
+      "layer": "features",
+      "public": [
+        "LAYER"
+      ],
+      "depends": [
+        "(none)"
+      ],
+      "tested": "tests/features/selfcheck/test_manifest.py",
+      "footprint": "docs/FEATURES.md#selfcheck",
+      "vendored": false,
+      "lines": 16
+    },
+    "features/selfcheck/manifest.py": {
+      "feature": "selfcheck",
+      "layer": "features",
+      "public": [
+        "MANIFEST",
+        "register",
+        "health"
+      ],
+      "depends": [
+        "core.paths",
+        "core.registry",
+        "core.marshal",
+        "core.formats"
+      ],
+      "tested": "tests/features/selfcheck/test_manifest.py",
+      "footprint": "docs/FEATURES.md#selfcheck",
+      "vendored": false,
+      "lines": 201
     },
     "features/translate/__init__.py": {
       "feature": "translate",

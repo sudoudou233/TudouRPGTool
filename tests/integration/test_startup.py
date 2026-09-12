@@ -74,11 +74,18 @@ class TestStartup(unittest.TestCase):
     def test_all_features_register_and_are_healthy(self):
         payload = get(self.url + "api/features")
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["count"], 2)
+        # 功能清单是目录驱动的（§8-6），因此断言"≥ 已知的三个"而不是写死，
+        # 否则每加一个功能都要回来改这条测试
+        self.assertGreaterEqual(payload["count"], 3)
+        ids = [f["id"] for f in payload["features"]]
+        for required in ("translate", "cheats", "selfcheck"):
+            with self.subTest(feature=required):
+                self.assertIn(required, ids)
         for feature in payload["features"]:
             with self.subTest(feature=feature["id"]):
                 self.assertTrue(feature["ok"])
-                self.assertEqual(feature["health"]["status"], "ok")
+                self.assertEqual(feature["health"]["status"], "ok",
+                                 feature["health"].get("detail"))
 
     def test_index_is_html_with_mount_points(self):
         with urllib.request.urlopen(self.url, timeout=10) as response:
@@ -91,7 +98,8 @@ class TestStartup(unittest.TestCase):
 
     def test_all_static_assets_served(self):
         for path in ("app.js", "dom.js", "tokens.css", "components.css",
-                     "pages/translate.js", "pages/cheats.js"):
+                     "pages/translate.js", "pages/cheats.js",
+                     "pages/selfcheck.js"):
             with self.subTest(path=path):
                 with urllib.request.urlopen(self.url + path, timeout=10) as response:
                     self.assertEqual(response.status, 200)
@@ -122,8 +130,12 @@ class TestCleanEnvironment(unittest.TestCase):
     """
 
     STDLIB = set(sys.stdlib_module_names)
-    #: 工程内的一级包名
-    INTERNAL = {"core", "features", "ui", "tests", "tools", "app"}
+    #: 工程内的一级包名 / 模块名
+    #:
+    #: ``run`` 是交付入口 ``run.py``（双击启动脚本体，见 tests/integration/
+    #: test_launcher.py）。它被 import 不是第三方依赖，但也**不能**靠
+    #: 目录名推断 —— 所以显式列出来。
+    INTERNAL = {"core", "features", "ui", "tests", "tools", "app", "run"}
 
     def _scan(self, path):
         with open(path, encoding="utf-8") as f:

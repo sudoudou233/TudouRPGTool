@@ -41,9 +41,23 @@ class TestAppAssembly(unittest.TestCase):
         self.assertTrue(info["version"])
         self.assertEqual(info["bind"], "127.0.0.1")
 
-    def test_registry_has_both_features(self):
-        self.assertIsNotNone(self.app.registry)
-        self.assertEqual(sorted(self.app.registry.ids()), ["cheats", "translate"])
+    def test_registry_discovers_every_feature_directory(self):
+        """功能清单必须与 ``features/`` 下的目录**双向一致**。
+
+        ⚠ 不要写死 ``["cheats", "translate"]``：这个清单是"目录驱动"的
+        （加一个 ``features/<id>/manifest.py`` 就会多一个功能，见需求 §8-6
+        的扩展性要求）。写死会让"新增功能"必须先改测试，
+        那正是"外壳随功能变化"的反面。这里改为**与磁盘对照**。
+        """
+        features_dir = paths.features_dir()
+        on_disk = sorted(
+            name for name in os.listdir(features_dir)
+            if os.path.isfile(os.path.join(features_dir, name, "manifest.py")))
+        self.assertTrue(on_disk, "features/ 下没有找到任何功能模块")
+        self.assertEqual(sorted(self.app.registry.ids()), on_disk)
+        for required in ("translate", "cheats", "selfcheck"):
+            with self.subTest(feature=required):
+                self.assertIn(required, on_disk)
 
     def test_register_report_all_ok(self):
         for feature, result in self.app.register_report.items():
@@ -52,7 +66,10 @@ class TestAppAssembly(unittest.TestCase):
 
     def test_context_holds_routes_and_pages(self):
         self.assertGreater(len(self.app.context.router), 5)
-        self.assertEqual(set(self.app.context.pages), {"translate", "cheats"})
+        pages = set(self.app.context.pages)
+        for required in ("translate", "cheats", "selfcheck"):
+            with self.subTest(page=required):
+                self.assertIn(required, pages)
 
     def test_core_routes_exist(self):
         patterns = {r["pattern"] for r in self.app.context.router.describe()}
@@ -74,10 +91,10 @@ class TestAppAssembly(unittest.TestCase):
         routes = self.app.context.router.describe()
         patterns = {r["pattern"] for r in routes}
         for required in ("/api/translate/providers", "/api/cheats/status",
-                         "/api/cheats/detect"):
+                         "/api/cheats/detect", "/api/selfcheck/report"):
             with self.subTest(pattern=required):
                 self.assertIn(required, patterns)
-        for feature in ("translate", "cheats"):
+        for feature in self.app.registry.ids():
             owned = [r for r in routes if r["feature"] == feature]
             with self.subTest(feature=feature):
                 self.assertTrue(owned, "%s 没有登记任何路由" % feature)
@@ -128,7 +145,11 @@ class TestSelfCheck(unittest.TestCase):
 
     def test_check_reports_registry(self):
         registry = self.report["registry"]
-        self.assertEqual(registry["count"], 2)
+        # 别写死功能数量：清单是目录驱动的（§8-6）。这里断言"自检报告里的
+        # 数量与真实发现的数量一致"，写死会让新增功能必须先改这条测试。
+        expected = len(self.app.registry.ids())
+        self.assertEqual(registry["count"], expected)
+        self.assertGreaterEqual(expected, 3)
         self.assertEqual(registry["errors"], [])
         self.assertTrue(registry["ok"])
 
@@ -193,7 +214,7 @@ class TestCli(unittest.TestCase):
         payload = json.loads(result.stdout[start:])
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["problems"], [])
-        self.assertEqual(payload["registry"]["count"], 2)
+        self.assertGreaterEqual(payload["registry"]["count"], 3)
 
     def test_help_lists_documented_flags(self):
         result = self.run_cli("--help")

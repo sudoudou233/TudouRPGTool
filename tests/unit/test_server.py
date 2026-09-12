@@ -266,25 +266,37 @@ class TestCoreRoutes(unittest.TestCase):
         status, payload = http(self.url + "api/health")
         self.assertEqual(status, 200)
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["registry"]["count"], 2)
+        # 功能数量是目录驱动的（§8-6）；断言"≥ 已知的三个"而不是写死，
+        # 这样新增功能不必回头改这条测试
+        self.assertGreaterEqual(payload["registry"]["count"], 3)
 
-    def test_features_lists_both_with_health(self):
+    def test_features_lists_every_discovered_feature_with_health(self):
         status, payload = http(self.url + "api/features")
         self.assertEqual(status, 200)
-        ids = [f["id"] for f in payload["features"]]
-        self.assertEqual(sorted(ids), ["cheats", "translate"])
+        ids = sorted(f["id"] for f in payload["features"])
+        self.assertEqual(ids, sorted(self.app.registry.ids()),
+                         "/api/features 与注册表不一致")
         for feature in payload["features"]:
-            self.assertEqual(feature["health"]["status"], "ok")
+            with self.subTest(feature=feature["id"]):
+                self.assertEqual(feature["health"]["status"], "ok",
+                                 feature["health"].get("detail"))
 
-    def test_nav(self):
+    def test_nav_is_sorted_by_declared_order(self):
         status, payload = http(self.url + "api/nav")
-        self.assertEqual([i["id"] for i in payload["items"]],
-                         ["translate", "cheats"])
+        orders = [(i["order"], i["id"]) for i in payload["items"]]
+        self.assertEqual(orders, sorted(orders),
+                         "导航没有按 order 排序：%s" % orders)
+        ids = [i["id"] for i in payload["items"]]
+        for required in ("translate", "cheats", "selfcheck"):
+            with self.subTest(feature=required):
+                self.assertIn(required, ids)
 
-    def test_pages(self):
+    def test_pages_lists_every_page(self):
         status, payload = http(self.url + "api/pages")
         modules = {p["module"] for p in payload["pages"]}
-        self.assertEqual(modules, {"translate", "cheats"})
+        for required in ("translate", "cheats", "selfcheck"):
+            with self.subTest(page=required):
+                self.assertIn(required, modules)
 
     def test_routes_include_feature_routes(self):
         status, payload = http(self.url + "api/routes")
@@ -296,6 +308,16 @@ class TestCoreRoutes(unittest.TestCase):
         self.assertIn("/api/cheats/detect", patterns)
         # M3b：修改功能同样接线
         self.assertIn("/api/cheats/saves", patterns)
+        # §8-6：新增功能的路由也自动出现
+        self.assertIn("/api/selfcheck/report", patterns)
+
+    def test_selfcheck_report_over_http(self):
+        """§8-6 的演示功能端到端过一次 HTTP。"""
+        status, payload = http(self.url + "api/selfcheck/report")
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertGreaterEqual(payload["assembly"]["feature_count"], 3)
+        self.assertEqual(payload["convergence"]["marshal"], "merged")
 
     def test_translate_state_over_http(self):
         """端到端过一次 HTTP：路由 → 处理器 → JSON 序列化。

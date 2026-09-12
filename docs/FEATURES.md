@@ -189,6 +189,52 @@
 
 ---
 
+### selfcheck —— 环境自检（需求 §8-6 的扩展性演示）
+
+| 项 | 内容 |
+| --- | --- |
+| 功能 id | `selfcheck` |
+| 用户可见名称 | 环境自检 |
+| 图标 | 检 |
+| 版本 | 1.0.0 |
+| 状态 | **已完成**（M5） |
+| 界面入口 | 导航项「环境自检」→ `ui/web/pages/selfcheck.js` |
+| 后端入口 | `features/selfcheck/manifest.py` → `register(ctx)` |
+| API 前缀 | `/api/selfcheck` |
+| 声明的页面 | `{id: selfcheck, title: 环境自检, module: selfcheck, order: 90}` |
+| 断言测试 | `tests/features/selfcheck/test_manifest.py`（16 例） |
+| 验证命令 | `python tests/run_all.py --suite features` |
+
+**已注册的 API 路由**（1 条，只读）
+
+| 方法 | 路径 | 作用 |
+| --- | --- | --- |
+| GET | `/api/selfcheck/report` | 运行环境 / 装配结果 / 收敛状态 / 能力边界 |
+
+**它演示什么**：需求 §8-6 要求"现场新增一个最小功能，只用契约规定的方式
+即可让它出现在界面上"。这个功能就是这么加进来的 —— **源码只有三个文件**：
+
+```text
+features/selfcheck/__init__.py      # 包标记
+features/selfcheck/manifest.py      # MANIFEST + register(ctx)
+ui/web/pages/selfcheck.js           # 页面（导出 render）
+```
+
+而 `app.py` / `ui/server.py` / `ui/web/index.html` / `ui/web/app.js`
+**一个字节都没有改动**。这一点由
+`tests/features/selfcheck/test_manifest.py::TestExtensibilityProof` 静态断言
+（外壳文件里不许出现 `selfcheck` 这个名字），而不是靠"我们试过一次"。
+
+**它有什么用**：把"运行环境现在是什么样"摊开 —— Python 版本、工程根与运行
+数据目录是否可写、已加载的功能与路由数、三类收敛状态、支持/仅识别的引擎、
+真实样本目录是否设置。排查"为什么我这里不行"时先看这一页。
+
+**刻意不拆 `routes.py`**：只有一个只读端点，拆开只会增加阅读跳转。
+契约只要求 `manifest.py` 里有 `MANIFEST` 与 `register(ctx)`；
+`translate` 拆出 `routes.py` 是因为它有 17 个端点与会话状态。
+
+---
+
 ## 2. 功能模块契约（新增功能必须遵守）
 
 ### 2.1 目录结构

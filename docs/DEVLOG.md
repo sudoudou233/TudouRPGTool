@@ -5,6 +5,97 @@
 
 ---
 
+## 2026-09-13 ｜ M4/M5：UI 统一性契约、双击启动入口、扩展性演示（新增 selfcheck 功能）
+
+### 改了什么
+
+需求 §8 的 8 项逐条落地。本轮新增/改动：
+
+| 文件 | 变更 |
+| --- | --- |
+| `启动.bat`（新） | 双击启动入口。**纯 ASCII + CRLF**，逻辑为零：切目录、找 `py`/`python`、转交 `run.py` |
+| `run.py`（新） | 启动器的"厚"部分：找 Python（多路径兜底）→ 版本检查 → 自检 → 起服务。中文提示都在这里 |
+| `features/selfcheck/{__init__,manifest}.py`（新） | **§8-6 的扩展性演示**：环境自检功能，1 个只读端点 |
+| `ui/web/pages/selfcheck.js`（新） | 该功能的页面（导出 `render`） |
+| `tests/features/selfcheck/test_manifest.py`（新，16 例） | 含 `TestExtensibilityProof`：**外壳文件里不许出现 `selfcheck` 这个词** |
+| `tests/integration/test_launcher.py`（新，16 例） | 批处理必须纯 ASCII + CRLF、`run.py --check` 退出码 0、README 里的参数必须真实存在 |
+| `tests/integration/test_ui_consistency.py`（新，18 例） | **§8-8**：页面的每个类都必须在 `components.css` 里定义、无硬编码色值、令牌引用全部已定义、响应式成因 |
+| `README.md`（新） | 面向使用者：怎么启动、两个功能怎么用、出了事怎么还原、安全约定、常见问题 |
+| `tests/unit/test_app.py`、`test_server.py`、`test_startup.py` | 把"功能数量 = 2"这类**写死**断言改成"与磁盘/注册表对照" |
+| `docs/{STATE,DEVLOG,FEATURES,UI_SPEC,MODULES}.md` + `docs/footprint.json` | 足迹更新 |
+
+### 为什么（三个值得记的决定）
+
+#### 1) 批处理里**不能写中文** —— 实测 cmd.exe 会吃掉每行第一个字节
+
+第一版 `启动.bat` 把中文提示直接写在批处理里。实测输出：
+
+```text
+'cho.' is not recognized as an internal or external command     ← echo. 被吃了首字符
+'YTHON_EXEPYTHON_ARGS' is not recognized ...                    ← %PYTHON_EXE% 被吃了首字符
+```
+
+即使 `chcp 65001`、即使文件是 UTF-8，**每个非 ASCII 行仍会丢首字节**。
+所以最终形态是"**薄批处理 + 厚 Python**"：`.bat` 只有 ASCII、逻辑为零，
+所有中文提示放在 `run.py`（普通 UTF-8 Python，不受影响）。
+这条约束已经写成断言（`test_bat_is_ascii_only`），防止后人"顺手加一句中文提示"。
+
+#### 2) 扩展性演示不是"我们试过一次"，而是**可执行的断言**
+
+需求 §8-6 要求"现场新增一个最小功能，只用契约规定的方式即可让它出现在界面上"。
+与其截图，不如把演示做成第三个功能 `selfcheck` 并留下静态证据：
+
+* `TestExtensibilityProof.test_shell_never_mentions_the_new_feature` ——
+  `app.py` / `ui/server.py` / `ui/web/index.html` / `ui/web/app.js`
+  **里不许出现 `selfcheck` 这个词**（出现就说明"零外壳改动"不成立）；
+* `test_new_feature_is_only_three_files` —— 源码只有包标记 + manifest + 页面；
+* `test_registry_scan_is_directory_driven` —— 功能发现是"列目录"，
+  不是写死的清单。
+
+顺带把三处**写死"功能数量 = 2"** 的旧断言改成与磁盘/注册表对照
+（`test_app.py`、`test_server.py`、`test_startup.py`）。这不是为了让新测试通过
+而放宽断言 —— 写死数量本身就是"外壳随功能变化"的反面，
+与 §8-6 要证明的性质直接冲突。
+
+#### 3) UI 统一性可以机械验证，但"观感"必须留给人
+
+§8-8 的两句话分开对待：
+
+* "全部页面共用同一套令牌与组件，无孤立样式" —— **机械可查**：
+  扫描三个页面得到 31 个类名，断言每一个都在 `components.css` 里定义
+  （实测 0 个未定义）；断言没有硬编码色值、没有页面自带 `<style>`、
+  引用的每个 `var(--x)` 都在 `tokens.css` 里定义。
+* "常见窗口尺寸下无布局错乱" —— **量不了像素**（不引 playwright）。
+  改为断言**成因**：栅格 `auto-fit`、`.row` 会换行、表格 `overflow:auto`
+  + `max-height`、模态框 `max-width: min(...)`、容器不写死像素宽度；
+  真正的观感走查列在 `docs/UI_SPEC.md` §7.1，写明三档窗口各看什么。
+
+### 怎么验证
+
+```powershell
+python tests/run_all.py                 # 867 例，退出码 0
+python tools/check_footprint.py         # 43 文件 / 3 功能，0 错误
+python app.py --check                   # 退出码 0（46 条路由，3 个功能）
+python run.py --check                   # 退出码 0（同上，走的是启动器路径）
+node --check ui/web/pages/selfcheck.js  # JS 语法
+
+# 双击脚本实测（后台起服务 + 打一次 /api/health）：
+cmd /c 启动.bat --port 8766 --no-browser   # → health 200
+```
+
+**§8-1 的实测记录**：
+`Start-Process cmd /c 启动.bat --port 8766 --no-browser` →
+`http://127.0.0.1:8766/api/health` 返回 200，
+`convergence.all_merged == true`，`/`、`/pages/translate.js` 均 200。
+
+### 遗留
+
+* 1280×720 等窗口的**观感**仍需人工看一眼（步骤已写在 `docs/UI_SPEC.md` §7.1）
+* `README.md` 已写，但还没"照着做一遍"通读
+* `docs/迁移对照表.md` 的 ⬜/⚠️ 标注待最后收口
+
+---
+
 ## 2026-09-13 ｜ M3b 完成：修改功能接线（六张卡片），改档与数据表编辑全链路走通
 
 ### 改了什么
