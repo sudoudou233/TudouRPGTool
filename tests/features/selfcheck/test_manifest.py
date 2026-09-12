@@ -128,6 +128,37 @@ class TestReportEndpoint(unittest.TestCase):
         self.assertIn("features", payload["assembly"])
         self.assertIn("route_count", payload["assembly"])
 
+    def test_convergence_agrees_with_health(self):
+        """**回归**：自检页的收敛状态必须与 ``/api/health`` **完全一致**。
+
+        M5 实测踩到：``/api/health`` 的 ``convergence.engines`` 曾在
+        ``ui/routes.py`` 里**硬编码** ``"merged"``，而自检页读的是
+        ``core.engines.CONVERGENCE_STATUS`` —— 那个常量当时还不存在，
+        于是自检页显示 ``engines: unknown``，两个报告互相矛盾。
+
+        同一个事实有两个来源就迟早漂移，所以这条断言把"同源"钉住。
+        """
+        from ui.routes import convergence_status
+        self.assertEqual(self.report["convergence"], convergence_status(),
+                         "自检页与 /api/health 的收敛状态不一致")
+
+    def test_core_engines_declares_convergence_status(self):
+        """三个收敛状态必须都能从各自模块读到（不能靠写死字符串）。"""
+        from core import engines, formats, marshal
+        for module in (engines, formats, marshal):
+            with self.subTest(module=module.__name__):
+                self.assertEqual(
+                    getattr(module, "CONVERGENCE_STATUS", None), "merged")
+
+    def test_ui_routes_does_not_hardcode_convergence(self):
+        """``ui/routes.py`` 不得再硬编码 ``"engines": "merged"``。"""
+        path = os.path.join(_ROOT, "ui", "routes.py")
+        with open(path, encoding="utf-8") as f:
+            source = f.read()
+        self.assertNotIn('"engines": "merged"', source,
+                         "收敛状态又被写死了 —— 会与 core.engines 漂移")
+        self.assertIn("engines.CONVERGENCE_STATUS", source)
+
 
 class TestExtensibilityProof(unittest.TestCase):
     """**§8-6 的静态证据**：外壳里没有这个功能的名字。"""

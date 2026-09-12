@@ -3,7 +3,8 @@
 
 @feature  none
 @layer    core
-@public   detect, detect_engine, describe, list_saves, find_save_dirs, data_dir, save_dir
+@public   detect, detect_engine, describe, list_saves, find_save_dirs, data_dir,
+          save_dir, CONVERGENCE_STATUS
 @depends  core.constants
 @tested   tests/unit/test_engines.py
 @footprint docs/MODULES.md#coreengines
@@ -37,6 +38,15 @@ import os
 import re
 
 from . import constants
+
+#: 收敛状态：本模块**从第一天起就只有一份实现**（未经历"两份再合并"）。
+#:
+#: 为什么要这个常量，而不是在报告里写死字符串（M5 实测踩到）：
+#: ``/api/health`` 的 ``convergence.engines`` 原先是在 ``ui/routes.py`` 里
+#: **硬编码**的 ``"merged"``，而 ``features/selfcheck`` 读的是本模块的同名属性 ——
+#: 属性不存在，于是自检页显示 ``engines: unknown``，与健康检查**互相矛盾**。
+#: 同一个事实有两个来源，迟早会漂移；现在两边都读这一个常量。
+CONVERGENCE_STATUS = "merged"
 
 #: MV/MZ 判定用的 JS 文件名，按"越靠前越权威"排列。
 MZ_JS_MARKERS = ("rmmz_managers.js", "rmmz_core.js")

@@ -76,14 +76,24 @@ def register(ctx):
     """按契约装配：登记路由 + 声明页面。**只能通过 ctx 操作。**"""
     from core import constants, paths
 
+    from core import engines  # noqa: F401  （health 与报告都要用）
+
     @ctx.get("/api/selfcheck/report", name="selfcheck_report")
     def selfcheck_report(request=None):
         """一次返回全部环境信息（只读、无副作用）。"""
-        from core import marshal as marshal_pkg
+        from core import engines as engines_mod
         from core import formats
+        from core import marshal as marshal_pkg
         from core import safety
 
         root = paths.project_root()
+        convergence = {
+            "engines": engines_mod.CONVERGENCE_STATUS,
+            "formats": formats.CONVERGENCE_STATUS,
+            "marshal": marshal_pkg.CONVERGENCE_STATUS,
+        }
+        convergence["all_merged"] = all(v == "merged"
+                                        for v in convergence.values())
         report = {
             "ok": True,
             "python": {
@@ -101,12 +111,9 @@ def register(ctx):
                 "samples_root": paths.samples_root() or "",
             },
             "assembly": _assembly(ctx),
-            "convergence": {
-                "engines": getattr(__import__("core.engines", fromlist=["x"]),
-                                   "CONVERGENCE_STATUS", "unknown"),
-                "formats": getattr(formats, "CONVERGENCE_STATUS", "unknown"),
-                "marshal": getattr(marshal_pkg, "CONVERGENCE_STATUS", "unknown"),
-            },
+            # 三项都读各自模块的 CONVERGENCE_STATUS（**与 /api/health 同源**）：
+            # 只在这里写死会让两个报告互相矛盾（M5 实测踩到）
+            "convergence": convergence,
             "engines": {
                 "supported": [constants.engine_label(e) + " (%s)" % e
                               for e in constants.SUPPORTED_ENGINES],

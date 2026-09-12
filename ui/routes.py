@@ -27,16 +27,22 @@ def convergence_status():
 
     这是 M2b 的核心交付指标，放在 ``/api/health`` 里让"收敛是否完成"
     变成一个可观测的事实，而不是只写在文档里。
+
+    ⚠ ``engines`` 一项必须读 ``core.engines.CONVERGENCE_STATUS``，不能在这里
+    写死 ``"merged"``（M5 实测踩到）：``features/selfcheck`` 读的是那个常量，
+    写死会让两个报告**互相矛盾**（一个说 merged、一个说 unknown）。
+    三次状态值同源，改一处即三处一致。
     """
-    from core import marshal
+    from core import engines
     from core import formats
-    return {
-        "engines": "merged",                    # core/engines.py 从第一天起只有一份
-        "formats": formats.CONVERGENCE_STATUS,  # core/formats/jsoncodec.py
-        "marshal": marshal.CONVERGENCE_STATUS,  # core/marshal/ 待收敛为一份
-        "all_merged": (formats.CONVERGENCE_STATUS == "merged"
-                       and marshal.CONVERGENCE_STATUS == "merged"),
+    from core import marshal
+    status = {
+        "engines": engines.CONVERGENCE_STATUS,
+        "formats": formats.CONVERGENCE_STATUS,
+        "marshal": marshal.CONVERGENCE_STATUS,
     }
+    status["all_merged"] = all(v == "merged" for v in status.values())
+    return status
 
 
 def register_core_routes(ctx, app=None):

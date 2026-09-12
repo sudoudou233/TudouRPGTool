@@ -212,6 +212,21 @@ M2b 的 marshal 收敛完成后，把 `rgss_data.py` 切到 `value_layer`。**VX
 * `tests/features/cheats/test_writeback_regressions.py`（20 例）：N-16 / N-17 / B-02 存档侧
 * `tests/integration/test_cheats_page.py`（20 例）：页面静态契约
 
+### M5 验收期**新发现**的问题（同一家族：不报错，但给出看起来合理的错误答案）
+
+| 编号 | 位置 | 问题 | 修法 |
+| --- | --- | --- | --- |
+| **N-18** | `core/formats/rgss_data.py` | 数据文件扩展名白名单只有 `.rvdata2` / `.rxdata`，**漏了 VX 的 `.rvdata`** → 整个 VX 游戏扫出 0 条；第二处：`marshal.loads` 用默认（变体）编码，而 VX 是标准编码 | 新增 `RGSS_DATA_EXTS`；新增 `load_data_file(path, standard)` **两种编码都试**；`extract` / `apply_to_files` 接 `info["standard"]`。回归：`test_real_sample_regressions.py::TestN18VXDataFiles` |
+| **N-19** | `core/formats/rgss_save.py` | 改造版 VX Ace 的存档是**两条流**（第 1 条是启动器元数据，第 2 条才是游戏状态），而 `read_party`/`read_actors`/`read_var` 硬编码 `streams[0]` → 真实存档读出来是"金币 0、没有角色、没有道具" | 新增 `state_index()`（找有 `party` 的流）+ `_target_streams()`（写操作跳过无状态的流，否则在 `None` 上取 ivar 会抛）。回归：`TestN19MultiStreamSave`（含真实样本用例） |
+| **N-20** | `features/cheats/data_fields.py` | `load_data_file` 返回**值层代理**，而 `_to_plain` 按 doc_model 节点判定类型 → 每个分支都不成立 → 整文件读成 `None`（界面"一个可编辑字段都没有"） | 先 `value_layer.unwrap_to_node`。回归：`TestN20ProxyUnwrap` |
+| **N-21** | `core/engines.py`、`ui/routes.py` | "收敛是否完成"有**两个来源**：`/api/health` 里 `engines` 是硬编码 `"merged"`，而自检页读 `core.engines.CONVERGENCE_STATUS`（**该常量不存在**）→ 自检页显示 `unknown`，与健康检查**互相矛盾**，两边都"成功返回" | 在 `core/engines.py` 补 `CONVERGENCE_STATUS`，两处都读它，`all_merged` 由三项现算。回归：`test_convergence_agrees_with_health` + `test_ui_routes_does_not_hardcode_convergence` |
+| **N-22** | `启动.bat` | 双击启动优先 `py -3`（本机是 **3.14.5**），而文档/测试/`app.py --check` 用的是 PATH 上的 `python`（3.10.9）→ **用户路径与验证路径跑的不是同一个解释器** | `where python` 提前，`py -3` 兜底。回归：`test_bat_prefers_path_python_over_py_launcher` |
+
+**这一家族的共同形态**：不报错，只给出**看起来合理**的错误答案。
+N-16（0/False 被当"没有值"）、N-17（字段名不一致→校验空转）、
+N-21（常量缺失→报告矛盾）、N-22（入口与开发环境不一致）都是这一类。
+**防止办法是让断言比对"两个来源"，而不是各自断言"我这边对"。**
+
 ### 真实样本扫描基线（M3a 实测，供后续对照）
 
 | 游戏 | 引擎 | 条目数 | 对话 | 耗时 |
@@ -229,7 +244,7 @@ M2b 的 marshal 收敛完成后，把 `rgss_data.py` 切到 `value_layer`。**VX
 ## 6. 当前测试状态
 
 ```powershell
-python tests/run_all.py                      # 867 例，0 失败 0 错误
+python tests/run_all.py                      # 869 例，0 失败 0 错误
 python tests/run_all.py --quiet              # 退出码 0
 python tools/check_footprint.py --quiet      # 退出码 0（43 文件 / 3 功能）
 python app.py --check                        # 退出码 0（46 条路由）

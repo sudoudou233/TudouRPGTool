@@ -86,6 +86,31 @@ class TestLauncherFiles(unittest.TestCase):
         self.assertIn("python.org", text,
                       "找不到 Python 时应告诉用户去哪装")
 
+    def test_bat_prefers_path_python_over_py_launcher(self):
+        """**回归**：优先用 PATH 上的 ``python``，而不是 ``py -3``。
+
+        M5 实测踩到：本机 ``py -3`` 指向 Python **3.14.5**（最新安装），
+        而 ``python`` 指向 3.10.9 —— 也就是文档里所有命令
+        （``python app.py`` / ``python tests/run_all.py``）与全部测试
+        实际使用的那一个。批处理原先优先 ``py -3``，于是**双击启动跑的解释器
+        与开发/验证时用的不是同一个**：用户环境的问题无法复现，
+        开发环境的问题也不会在这条路径上暴露。
+        """
+        text = open(LAUNCHER, encoding="ascii").read()
+        lines = [ln for ln in text.splitlines()
+                 if "where " in ln and "run.py" in ln]
+        self.assertEqual(len(lines), 2, "批处理里应当有两条解释器探测：%s" % lines)
+        self.assertIn("where python", lines[0],
+                      "第一条应当是 PATH 上的 python：%s" % lines[0])
+        self.assertTrue(lines[1].strip().startswith("where py"),
+                        "第二条才是 py 启动器：%s" % lines[1])
+
+    def test_bat_is_ascii_only_and_crlf(self):
+        """把两条硬约束合成一条，避免以后只改了一处就以为全对。"""
+        raw = open(LAUNCHER, "rb").read()
+        self.assertEqual([b for b in raw if b > 0x7F], [], "批处理里有非 ASCII 字节")
+        self.assertEqual(len(re.findall(rb"(?<!\r)\n", raw)), 0, "批处理里有单独的 LF")
+
 
 class TestRunPy(unittest.TestCase):
     def test_imports_without_side_effects(self):

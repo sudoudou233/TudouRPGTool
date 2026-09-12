@@ -5,6 +5,75 @@
 
 ---
 
+## 2026-09-13 ｜ M5 复查：修掉自检页与健康检查的收敛状态矛盾、启动器选错解释器
+
+这两条都是**最后一遍端到端验收**时发现的 —— 而且是"文档说要做的验证
+（§8-1 双击启动实测）真的做了一遍"才暴露出来的。
+
+### N-21：同一个事实有两个来源，于是两个报告互相矛盾
+
+`features/selfcheck` 的页面显示：
+
+```text
+收敛状态：全部收敛 否 | 引擎识别 unknown | MV/MZ 编解码 merged | Ruby Marshal merged
+```
+
+而 `/api/health` 同一时刻说 `all_merged: true`。原因：
+
+* `ui/routes.py` 的 `convergence_status()` 里，`engines` 一项是**硬编码**
+  的 `"merged"`（注释写着"core/engines.py 从第一天起只有一份"）；
+* `features/selfcheck` 读的是 `core.engines.CONVERGENCE_STATUS` ——
+  那个常量**当时并不存在**，`getattr(..., "unknown")` 就吃掉了这个错误。
+
+于是同一个"收敛是否完成"在两处给出**相反**的答案，而两者都是"成功返回"。
+这与 N-16/N-17 同一家族：**防线/指标看起来在，实际不一致**。
+
+**修法**：在 `core/engines.py` 里补 `CONVERGENCE_STATUS = "merged"`，
+让 `ui/routes.py` 与 `selfcheck` 都读它（`formats` / `marshal` 早就这么做了），
+`all_merged` 由三项现算而不是手写条件。回归：
+`test_convergence_agrees_with_health` + `test_ui_routes_does_not_hardcode_convergence`。
+
+### N-22：双击启动跑的解释器与开发/验证时用的不是同一个
+
+本机的解释器分布：
+
+```text
+py -3   →  Python 3.14.5   （最新安装，C:\Users\tudou\AppData\Local\Python\pythoncore-3.14-64）
+python  →  Python 3.10.9   （PATH 上的那个，也就是 python app.py / run_all.py 用的）
+```
+
+而 `启动.bat` 原先**优先 `py -3`** —— 于是"双击启动"跑的是 3.14.5，
+而全部 869 个测试、`app.py --check`、文档里的每条命令跑的是 3.10.9。
+后果很具体：用户环境的问题在这条路径上无法复现，开发环境的问题也不会
+在这条路径上暴露。
+
+**修法**：`where python` 提到前面（PATH 上的 python 优先），`py -3` 作为兜底。
+回归：`test_bat_prefers_path_python_over_py_launcher`。
+
+**顺带的好消息**：3.14.5 上 `app.build_app()` 也能装配成功、46 条路由齐全 ——
+说明代码没有依赖已移除的旧行为（也算给"3.8 兼容"多了一个跨版本证据点）。
+
+### 怎么验证
+
+```powershell
+python tests/run_all.py                 # 869 例，退出码 0
+python tools/check_footprint.py         # 43 文件 / 3 功能，0 错误
+
+# 双击脚本实测（后台起服务后打两个端点，比对收敛状态）：
+cmd /c 启动.bat --port 8793 --no-browser
+# → selfcheck python: 3.10.9
+# → selfcheck convergence == health convergence（四个键全等）
+```
+
+### 教训（与 N-16/N-17 合并成一条）
+
+**"同一个事实有多个来源"是最容易漏的一类缺陷。**
+N-17 是字段名不一致导致校验失效，N-21 是常量缺失导致两个报告矛盾，
+N-22 是入口与开发环境不一致 —— 三者都不会报错，只会给出**看起来合理**的
+错误答案。防止办法是让断言去比对**两个来源**（而不是各自断言"我这边对"）。
+
+---
+
 ## 2026-09-13 ｜ M4/M5：UI 统一性契约、双击启动入口、扩展性演示（新增 selfcheck 功能）
 
 ### 改了什么
