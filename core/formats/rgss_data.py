@@ -429,9 +429,13 @@ def _index(seg, path):
 
 
 def _set_value(parent, key, value, original):
-    """写回译文，**跟随原值的编码**。
+    """写回**字符串**译文，跟随原值的编码。
 
-    ``original`` 参数保留在签名里（调用方一直传），留给 M2b 之后的
+    ⚠ 只想改数字/布尔时请用 :func:`_set_scalar` —— 本函数会把值编码成
+    字符串节点（``Fixnum(888888)`` 会被写成 ``"888888"`` 字符串），
+    因为它的调用方（翻译链路）改的永远是文本。
+
+    ``original`` 参数保留在签名里（调用方一直传），留给后续的
     "陈旧性校验"（数据变了就不盲写）。当前行为与原实现一致：只按 path 定位后写入。
 
     编码处理（M2b 起由 ``value_layer`` 支撑）
@@ -447,31 +451,93 @@ def _set_value(parent, key, value, original):
     这一步不能省：XP 文本是 cp932、VX Ace 是 UTF-8。若一律按 UTF-8 写回，
     cp932 的旧文本会被重新编码，字节数变化 —— 游戏读到的字符串长度可能不对。
     """
-    if _is_object_proxy(parent):
-        old = parent.ivars.get(key)
-    elif isinstance(parent, (list, tuple)) or _is_array_proxy(parent):
-        old = parent[_index(key, "set_value")]
-    elif isinstance(parent, dict):
-        if key in parent:
-            old = parent[key]
-        else:
-            old = parent.get(_index(key, "set_value"))
-    else:
-        raise KeyError("无法在不支持的类型上写值：%s" % type(parent).__name__)
+    enc = _encoding_of(_current_value(parent, key))
+    node = _string_node(value, enc)
+    _assign_value(parent, key, node)
 
-    enc = _encoding_of(old)
-    if _is_ivar_proxy(old):
-        _assign_string(old, "value", value, enc)
-        return
+
+def _current_value(parent, key):
+    """取 ``parent[key]`` 的当前值（读不到返回 None，不抛）。"""
     if _is_object_proxy(parent):
-        parent.ivars[key] = _string_node(value, enc)
-    elif isinstance(parent, (list, tuple)) or _is_array_proxy(parent):
-        parent[_index(key, "set_value")] = _string_node(value, enc)
-    else:
+        return parent.ivars.get(key)
+    if isinstance(parent, (list, tuple)) or _is_array_proxy(parent):
+        index = _index(key, "current_value")
+        return parent[index] if -len(parent) <= index < len(parent) else None
+    if isinstance(parent, dict):
         if key in parent:
-            parent[key] = _string_node(value, enc)
+            return parent[key]
+        index = _index(key, "current_value")
+        return parent.get(index)
+    raise KeyError("无法在不支持的类型上取值：%s" % type(parent).__name__)
+
+
+def _assign_value(parent, key, node):
+    """把节点写回 ``parent[key]``，兼容 RMObject / 数组代理 / dict。"""
+    if _is_object_proxy(parent):
+        parent.ivars[key] = node
+        return
+    if isinstance(parent, (list, tuple)) or _is_array_proxy(parent):
+        parent[_index(key, "assign_value")] = node
+        return
+    if isinstance(parent, dict):
+        if key in parent:
+            parent[key] = node
         else:
-            parent[_index(key, "set_value")] = _string_node(value, enc)
+            parent[_index(key, "assign_value")] = node
+        return
+    raise KeyError("无法在不支持的类型上写值：%s" % type(parent).__name__)
+
+
+def _set_scalar(parent, key, value):
+    """写回**数字 / 布尔 / 字符串**，并跟随原值的类型。
+
+    为什么需要它（M3b 新增）
+    ------------------------
+    "修改游戏数据"要改的是开关（bool）、变量（int）、价格/攻击力之类（int），
+    而 :func:`_set_value` 只写字符串节点。直接把数字塞进去会产生
+    ``Fixnum(888888)`` → ``String("888888")`` 的类型漂移：游戏里读到的类型变了，
+    轻则显示异常，重则脚本报错。
+
+    取值规则：
+
+    * 原值是 ``Fixnum`` / ``Bignum`` → 写数字（布尔按 0/1）；
+    * 原值是 ``BoolNode`` → 写布尔；
+    * 原值是字符串 → **转成文本**（保持它声明的编码）；
+    * 原值读不到 → 按新值的 Python 类型决定。
+
+    ``Float`` 节点（Ruby 的浮点，占 8 字节）暂不支持 —— 真实游戏数据里
+    开关/变量/属性都是整数，遇到浮点时明确报错比静默写坏好。
+    """
+    old = _current_value(parent, key)
+    inner = _unwrap(old)
+
+    if isinstance(inner, _doc_model.Float):
+        raise TypeError("暂不支持改写浮点字段：%s（原值 %r）" % (key, old))
+
+    if isinstance(inner, _doc_model.BoolNode):
+        node = _doc_model.BoolNode(bool(value))
+    elif value is None:
+        node = _doc_model.NilNode()
+    elif isinstance(value, bool):
+        node = _doc_model.BoolNode(value)
+    elif isinstance(value, int):
+        node = _doc_model.Fixnum(value)
+    elif isinstance(value, float):
+        node = _doc_model.Fixnum(int(value))
+    elif isinstance(inner, (_doc_model.Fixnum, _doc_model.Bignum)):
+        # 原值是数字但新值是文本（例如把"数量"改成"很多"）—— 明确拒绝，
+        # 免得把数字字段写成字符串让游戏读崩
+        raise TypeError("字段 %s 原本是数字，不能写入文本 %r" % (key, value))
+    else:
+        return _set_value(parent, key, value, None)
+
+    # 原值被 Ivar 包装（带 encoding 标记）时，要**改内层**而不是替换外层，
+    # 否则会丢掉包装（RGSS 里开关数组的元素就常带包装）。
+    # ``RMIvar.value`` 的 setter 接受节点，内部会 unwrap_to_node 并标脏。
+    if _is_ivar_proxy(old):
+        old.value = node
+        return
+    _assign_value(parent, key, marshal.wrap(node))
 
 
 def _encoding_of(node):
@@ -510,22 +576,84 @@ def _entry_get(entry, key, default=None):
     return getattr(entry, key, default)
 
 
-def _entry_ready(entry):
-    """条目是否可写回：状态为 translated 且有非空译文。
-
-    条目可能是 dict（新实现）或对象（兼容旧调用方），因此两种都支持。
-    """
+def _entry_has(entry, key):
+    """条目里是否**存在**该字段（区别于"值是否为真"）。"""
     if isinstance(entry, dict):
-        status = entry.get("status")
-        translated = entry.get("translated")
-    else:
-        status = getattr(entry, "status", None)
-        translated = getattr(entry, "translated", None)
-    return status == "translated" and bool(translated)
+        return key in entry
+    return hasattr(entry, key)
+
+
+def _entry_ready(entry):
+    """条目是否可写回：状态为 translated，且**有** translated 字段。
+
+    ⚠ **M3b 修复**：原判据是 ``bool(translated)``，于是
+    ``translated=0``（把价格改成 0）、``translated=False``（关掉一个开关）
+    都被当成"没有译文"而**静默丢弃** —— 界面看起来"保存成功"，
+    游戏里却没变。现在改成"字段存在且不是 None"。
+
+    翻译链路不受影响：它的条目要么 ``status="pending"``（跳过），
+    要么有非空译文；空译文本来就该跳过。
+    """
+    if _entry_get(entry, "status") != "translated":
+        return False
+    if not _entry_has(entry, "translated"):
+        return False
+    return _entry_get(entry, "translated") is not None
+
+
+def _same_value(a, b):
+    """``expect`` 比较：``"3"``/``3``、``True``/``1`` 都视为相同。"""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return (1 if a else 0) == (1 if b else 0)
+    try:
+        return int(a) == int(b)
+    except (TypeError, ValueError):
+        return str(a) == str(b)
+
+
+def _plain(value):
+    """把节点/代理转成普通 Python 值（供 ``expect`` 比较与界面展示）。
+
+    只处理基本类型：文本走 :func:`_text_of`（它会剥编码包装），
+    数字/布尔取原生值，其余返回 ``None``（调用方按"不参与比较"处理）。
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        return value
+    text = _text_of(value)
+    if text is not None:
+        return text
+    for attr in ("value", "to_py"):
+        try:
+            got = getattr(value, attr)
+        except Exception:
+            continue
+        if callable(got):
+            try:
+                got = got()
+            except Exception:
+                continue
+        if isinstance(got, (bool, int, float, str)):
+            return got
+    return None
 
 
 def apply_to_files(game_info, entries_by_file, progress=None):
-    """把译文写回 rvdata2 / rxdata。
+    """把条目写回 rvdata2 / rxdata。
+
+    两类条目共用本函数（与 ``mv_mz_data.apply_to_files`` 对称）：
+
+    * **翻译**：``translated`` 是译文文本，按 ``_set_value`` 跟随原编码写入；
+    * **游戏数据修改**（M3b）：条目带 ``kind``（``int``/``bool``/``text``），
+      走 :func:`_set_scalar` 按原值类型写入（数字保持数字）。
+
+    ``expect``（可选）：带"我以为的原值"，只有当前值一致时才写 —— 数据在
+    别处被改过时宁可跳过（B-13 的同类防线）。
 
     ⚠ 2026-09-12 M2a 修复 **B-02**：原实现 ``open(full, "wb")`` 直接截断重写，
     写一半被中断就留下半写的存档/数据文件，游戏直接损坏。现走
@@ -553,15 +681,31 @@ def apply_to_files(game_info, entries_by_file, progress=None):
         for entry in entries:
             if not _entry_ready(entry):
                 continue
+            path = _entry_get(entry, "path")
+            value = _entry_get(entry, "translated")
             try:
-                parent, key, _ = _navigate(root, _entry_get(entry, "path"))
-                _set_value(parent, key, _entry_get(entry, "translated"),
-                           _entry_get(entry, "original"))
-                changed = True
-                stats["entries"] += 1
+                parent, key, _ = _navigate(root, path)
             except (KeyError, ValueError, IndexError, TypeError):
                 stats["skipped"] += 1
                 continue
+            if _entry_has(entry, "expect"):
+                try:
+                    current = _current_value(parent, key)
+                except (KeyError, ValueError, TypeError):
+                    current = None
+                if not _same_value(_plain(current), _entry_get(entry, "expect")):
+                    stats["skipped"] += 1
+                    continue
+            try:
+                if _entry_has(entry, "kind"):
+                    _set_scalar(parent, key, value)
+                else:
+                    _set_value(parent, key, value, _entry_get(entry, "original"))
+            except (KeyError, ValueError, IndexError, TypeError):
+                stats["skipped"] += 1
+                continue
+            changed = True
+            stats["entries"] += 1
         if changed:
             atomic_write_bytes(full, marshal.dumps(root))
             stats["files"] += 1

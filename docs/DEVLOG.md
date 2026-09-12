@@ -5,6 +5,129 @@
 
 ---
 
+## 2026-09-13 ｜ M3b 完成：修改功能接线（六张卡片），改档与数据表编辑全链路走通
+
+### 改了什么
+
+新增
+- `features/cheats/routes.py`（新，~640 行）：**18 个端点**把
+  读档 → 改数值 → 写回 → 数据表编辑 → 备份还原 接起来。
+  `CheatsService` 持有"当前游戏 / 当前存档"；`BackupPolicy` 是**唯一的备份落点**。
+- `features/cheats/data_fields.py`（新，~480 行）：**可编辑字段的唯一规则表**
+  （MV/MZ 与 RGSS 各一份，共 34 条字段规则）+ 扫描 / 陈旧性校验 / 写回编排。
+- `tests/features/cheats/test_routes.py`（新，109 例）
+- `tests/features/cheats/test_writeback_regressions.py`（新，20 例）
+- `tests/integration/test_cheats_page.py`（新，20 例）
+
+修改
+- `features/cheats/manifest.py`：从骨架改为**薄壳**（构造服务 + 委托路由 + 页面）
+- `ui/web/pages/cheats.js`：从 M1 骨架（115 行、3 张展示卡）重写为**真实功能页**
+  （~700 行、六张卡片）：① 游戏目录 ② 选存档（含多套存档警告）③ 金币/步数/道具
+  ④ 角色（属性 + 技能）⑤ 开关/变量（分页）⑥ 游戏数据表（按文件筛选、只提交改动过的字段）
+  ⑦ 保存与备份（"有未保存的改动"胶囊、放弃改动、保存存档、备份列表可还原）
+- `core/formats/mv_save.py`、`core/formats/rgss_save.py`：**B-02 残留 + 句柄泄漏**
+- `core/formats/mv_mz_data.py`、`core/formats/rgss_data.py`：**N-16**（0/False 被判为"没有值"）
+  + 新增 `expect` 陈旧性校验 + `_set_scalar`（RGSS 侧按原值类型写回）
+- `core/formats/rgss_data.py`：`_set_value` / `_assign_value` / `_current_value` 抽出，
+  供标量写回复用；`_assign_string` 随之删除
+- `tests/features/cheats/test_manifest.py`、`tests/unit/test_server.py`、
+  `tests/compat/test_m2a_regressions.py`：骨架断言换成真实端点；B-02 覆盖扩到存档侧
+- `docs/{STATE,DEVLOG,MODULES,FEATURES,UI_SPEC}.md` + `docs/footprint.json`
+
+### 为什么（本轮两个"必须记"的发现）
+
+#### 1) **N-16**：把值改成 `0` / `false` 会被静默丢弃
+
+写回层的判据原先是"值真不真"：
+
+```python
+if not entry.get("translated") or entry.get("status") != "translated":
+    continue          # ← translated=0 / False 在这里被当成"没有值"
+```
+
+于是"把道具数量改成 0"、"关掉一个开关"这类操作**界面显示成功、文件却没变**。
+两条写回路径（`mv_mz_data.apply_to_files` / `rgss_data.apply_to_files`）都中了这一招。
+
+修法是把判据从"值真不真"改成"**字段在不在**且不是 `None`"。
+M3a 的 N-12 ～ N-15 是"扫描/写回静默丢内容"，N-16 是同一家族的新成员 ——
+**而且这次连接口的成功都是假的**。四条同类缺陷合起来的教训：
+接线阶段必须验证"写进去了"，不能只看"任务成功"。
+
+#### 2) **N-17**：陈旧性校验因为字段名不一致而**完全失效**
+
+界面与路由传的是 `original`，而校验函数读的是 `expect`：
+
+```python
+if edit.get("expect") is None:
+    continue          # ← 界面永远不传 expect，于是每条都被跳过
+```
+
+校验**永远通过**，等于不存在。这类问题比"没有防线"更危险：评审时看到
+代码里有 `verify_original(...)`，会以为已经防住了"按 path 盲写改错对象"。
+
+修法：新增 `expected_value()` 同时接受 `original` 与 `expect` 两个名字，
+写回层也做同样的 `expect` 校验，并加一条**专项回归**
+（`test_data_edit_stale_check_reads_original_field`）。
+
+#### 3) 顺带补完 **B-02 的最后一处**：改存档也是原子写
+
+M2a 把"游戏数据 / 备份 / 清单"改成了原子写，但两个**存档**模块的 `save()`
+还是 `open(path, 'wb')` 直接截断 —— 而 M1/M2 阶段它们还没接线，所以没人碰。
+M3b 一接线就暴露了：**改存档恰恰是最容易毁玩家数据的操作**（写到一半
+中断 = 存档报废）。现在两条 `save()` 都走 `core.safety.atomic`，
+回归用"让 `os.replace` 失败"验证**原文件字节不变**。
+同时修掉 `open(path,'rb').read()` 的句柄泄漏（Windows 上会让后续替换失败）。
+
+### 怎么验证
+
+```powershell
+python tests/run_all.py                      # 791 例，0 失败 0 错误
+python tools/check_footprint.py --quiet      # 41 文件 / 2 功能，退出码 0
+python app.py --check                        # 退出码 0（45 条路由）
+node --check ui/web/pages/cheats.js          # JS 语法
+$env:TUDOU_RPGTOOL_SAMPLES='D:\gamess'
+python tests/run_all.py                      # 含 300 个 .rvdata2 零漂移 + 扫描量级断言
+```
+
+**关键证据**（都是自动断言，不是"跑通了"）：
+
+| 断言 | 结果 |
+| --- | --- |
+| 改金币后**重新解析存档文件** | 看到新值（不是只看接口返回 ok） |
+| 未确认时保存 | 拒绝写，且文件**字节不变** |
+| 确认保存 | 生成备份目录，`list_backups` 能看到（`has_manifest: true`） |
+| 从备份还原 | 文件回到**原字节**，内存里的对象也刷新 |
+| 把金币/步数改成 0 | 真的写进去了（N-16 的判据） |
+| VX Ace 改价格 | 写回的是 **Fixnum**，不是字符串（类型不漂移） |
+| 数据表改价格 | 只改目标字段，其它字段逐条核对不变 |
+| 带过期 `original` 的数据表改动 | 被拒绝并返回 `stale` 明细（N-17 的判据） |
+| 页面静态契约 | 三处写操作都有二次确认且传 `confirm: true` |
+
+### 写测试时踩到的坑（值得记）
+
+1. **助手方法的形参不能叫 `path`**：调用方写
+   `self.call("POST", "/api/cheats/load", path=存档路径)`，而 `path` 撞上
+   助手形参名 → `TypeError: got multiple values for argument 'path'`。
+   改成 `route_path`。（同一个函数里既收路由又收业务参数时必然遇到。）
+2. **`_norm` 用了 `≠` 但断言说 `=`** —— 其实是 N-17 的现场：
+   校验逻辑看起来对，但**上游字段名不对**，所以循环根本没进去。
+   教训：断言"校验拦住了"之前，先确认"校验真的执行了"。
+3. **夹具放错目录会掩盖问题**：MV 存档应放**游戏根下的 `save/`**，
+   我一开始放在 `www/save/`。`/saves` 走的是递归搜索所以"看起来能用"，
+   而 `/detect` 用的 `engines.list_saves` 返回空 —— 两个端点行为不一致时
+   先怀疑夹具。
+4. **同一个路径会出现在多个数据文件里**（`1/price` 在 Items 与 Weapons 都有）：
+   断言必须按 `(文件, 路径)` 定位，只按 path 会串到另一个文件的值。
+
+### 遗留
+
+* M4：跨页视觉与交互统一审查（两个页面已共用令牌与组件，缺一次实际走查）
+* M5：需求 §8 的 8 项逐条核对、`README.md`、双击启动器、MZ/XP 真实样本端到端
+* `docs/迁移对照表.md` 里 B-16（技能列表整体替换）与 B-17（开关写回）
+  原先标注"待迁移/无断言"，M3b 已补上断言 —— 待 M5 收口时更新标注
+
+---
+
 ## 2026-09-13 ｜ M3a 完成：翻译页面接线（五张卡片），全链路在界面走通
 
 ### 改了什么

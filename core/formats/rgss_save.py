@@ -5,10 +5,15 @@ RPG Maker RGSS (XP / VX / VX Ace) save & data access.
 @feature  cheats
 @layer    core
 @public   GameData, SaveFile, sync_dirty, find_top_hash
-@depends  core.marshal.doc_model
-@tested   tests/compat/test_formats_compat.py
+@depends  core.marshal.doc_model, core.safety.atomic
+@tested   tests/compat/test_formats_compat.py, tests/compat/test_m2a_regressions.py,
+          tests/features/cheats/test_routes.py
 @footprint docs/MODULES.md#coreformats
 @note     vendored：来自 rpgmaker_cheating_tool/rpgdata.py。
+@note     **M3b 修复两处**：
+@note     1) B-02 残留：save() 原先直接 ``open(path, 'wb')`` → 改原子写；
+@note     2) 句柄泄漏：``open(path,'rb').read()`` 依赖 GC 关闭文件
+@note        （Windows 上会让后续替换/删除失败）→ 改 ``with`` 语句。
 
 
 Handles both the stock Ruby Marshal format (XP .rxdata / VX .rvdata) and the
@@ -16,7 +21,9 @@ modified "MTool" Marshal used by this VX Ace build (.rvdata2), with
 byte-faithful re-serialization for everything that is not edited.
 """
 import os
+
 from ..marshal import doc_model as rmarshal
+from ..safety import atomic
 
 
 def _symname(parser, s):
@@ -65,7 +72,10 @@ class GameData:
             path = os.path.join(self.datadir, name)
             if not os.path.exists(path):
                 continue
-            buf = open(path, 'rb').read()
+            # 显式 with：原实现是 open(path,'rb').read()，依赖 GC 关句柄 ——
+            # Windows 上句柄没关会让后续的替换/删除失败（M3b 修）
+            with open(path, 'rb') as f:
+                buf = f.read()
             nodes = rmarshal.load_streams(buf, standard=self.standard)
             if not nodes:
                 return []
@@ -230,7 +240,8 @@ class SaveFile:
         self.gamedata = gamedata
         self.standard = standard
         self.layout = layout
-        self.raw = open(path, 'rb').read()
+        with open(path, 'rb') as f:     # 显式 with（原实现泄漏句柄，M3b 修）
+            self.raw = f.read()
         self.streams = rmarshal.load_streams(self.raw, standard=standard)
 
     # ---------------------------------------------------------------- lookup
@@ -506,11 +517,18 @@ class SaveFile:
 
     # ---------------------------------------------------------------- output
     def save(self, path=None):
+        """写回存档（**原子写**）。
+
+        ⚠ **B-02 残留修复（M3b）**：原实现 ``open(path, 'wb')`` 直接截断 ——
+        RGSS 存档动辄几百 KB，写到一半中断就把玩家存档毁了。现在走
+        :func:`core.safety.atomic.atomic_write_bytes`。
+
+        注意：写回前对每条流的根节点做 ``sync_dirty``，因为序列化器按
+        ``dirty`` 决定"复用原始字节"还是"重新编码"，漏标会让改动丢失。
+        """
         path = path or self.path
-        roots = [n for _, n in self.streams]
-        for r in roots:
-            sync_dirty(r)
-        out = b''.join(rmarshal.dumps(n) for _, n in self.streams)
-        with open(path, 'wb') as f:
-            f.write(out)
+        for _offset, node in self.streams:
+            sync_dirty(node)
+        out = b''.join(rmarshal.dumps(node) for _offset, node in self.streams)
+        atomic.atomic_write_bytes(path, out)
         return path

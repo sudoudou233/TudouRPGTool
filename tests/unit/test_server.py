@@ -294,6 +294,8 @@ class TestCoreRoutes(unittest.TestCase):
         # （骨架端点 /api/translate/status 已由 /api/translate/state 取代）
         self.assertIn("/api/translate/state", patterns)
         self.assertIn("/api/cheats/detect", patterns)
+        # M3b：修改功能同样接线
+        self.assertIn("/api/cheats/saves", patterns)
 
     def test_translate_state_over_http(self):
         """端到端过一次 HTTP：路由 → 处理器 → JSON 序列化。
@@ -318,6 +320,20 @@ class TestCoreRoutes(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(payload["ok"])
         self.assertEqual(len(payload["providers"]), 4)
+
+    def test_cheats_status_over_http(self):
+        status, payload = http(self.url + "api/cheats/status")
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["game"]["opened"])
+        self.assertTrue(payload["actor_attrs"])
+        self.assertNotEqual(payload.get("status"), "skeleton")
+
+    def test_cheats_saves_without_game_over_http(self):
+        status, payload = http(self.url + "api/cheats/saves")
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["ok"])
+        self.assertIn("游戏目录", payload["error"])
 
     def test_job_missing_code(self):
         status, payload = http(self.url + "api/job?id=nope")

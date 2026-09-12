@@ -102,49 +102,90 @@
 | 功能 id | `cheats` |
 | 用户可见名称 | 存档修改 |
 | 图标 | 改 |
-| 版本 | 0.1.0 |
-| 状态 | **M1 骨架 + 引擎识别链路已可用**（读档/改值/存档在 M3b 接线） |
+| 版本 | 0.3.0 |
+| 状态 | **已完成（M3b）** |
 | 界面入口 | 导航项「存档修改」→ `ui/web/pages/cheats.js` |
-| 后端入口 | `features/cheats/manifest.py` → `register(ctx)` |
+| 后端入口 | `features/cheats/manifest.py` → `register(ctx)` → `routes.register_routes()` |
 | API 前缀 | `/api/cheats` |
 | 声明的页面 | `{id: cheats, title: 存档修改, module: cheats, order: 20}` |
-| 断言测试 | `tests/features/cheats/test_manifest.py` |
+| 断言测试 | `tests/features/cheats/test_manifest.py`、`test_routes.py`、`test_writeback_regressions.py` |
 | 验证命令 | `python tests/run_all.py --suite features` |
 
-**已注册的 API 路由**
+**已注册的 API 路由**（18 条；清单由
+`test_routes.py::TestRouteRegistration.EXPECTED` **双向**核对）
 
-| 方法 | 路径 | 状态 | 作用 |
-| --- | --- | --- | --- |
-| GET | `/api/cheats/status` | 骨架占位 | 返回功能状态 |
-| POST | `/api/cheats/detect` | **可用** | 识别引擎、列出存档、探测多套存档目录 |
+| 方法 | 路径 | 作用 |
+| --- | --- | --- |
+| GET | `/api/cheats/status` | 功能状态 + 已打开上下文 + 可编辑属性/道具桶清单 |
+| POST | `/api/cheats/detect` | **无状态**识别：引擎判据 + 数据/存档目录 + 存档名 |
+| POST | `/api/cheats/open` | 识别并加载名字表（道具/角色/职业名），记住上下文 |
+| POST | `/api/cheats/pick_folder` | 原生文件夹对话框 |
+| GET | `/api/cheats/saves` | 存档列表（名称/时间/大小/目录）+ 当前存档 + 备份数 |
+| POST | `/api/cheats/load` | 打开存档（**路径必须在本游戏存档目录内**） |
+| GET | `/api/cheats/party` | 金币 / 步数 / 队伍成员 / 三个道具桶（带可读名字） |
+| GET | `/api/cheats/actors` | 角色数组 + 可编辑属性清单 |
+| GET | `/api/cheats/vars` | 开关 / 变量分页读取 |
+| POST | `/api/cheats/party` | 改金币/步数/道具数量（**只改内存**） |
+| POST | `/api/cheats/actor` | 改角色属性 / 技能列表（**只改内存**） |
+| POST | `/api/cheats/var` | 改开关 / 变量（**只改内存**） |
+| POST | `/api/cheats/save` | 写回存档（**先备份**；覆盖必须 `confirm=true`） |
+| GET | `/api/cheats/data` | 列出可编辑的游戏数据字段（价格/攻击力/初始等级…） |
+| POST | `/api/cheats/data` | 写回数据表（先备份、必须 `confirm=true`、含陈旧性校验） |
+| GET | `/api/cheats/backups` | 备份列表 |
+| POST | `/api/cheats/restore` | 从备份还原（还原前自动再备份一次） |
+| POST | `/api/cheats/open_dir` | 在文件管理器中打开目录 |
 
-**依赖的 core 能力**
+**接口层的四条不变量**（都有断言，改动时必须保持）：
+
+1. **"改内存"与"写盘"分开** —— 前三个 POST 只改内存里的存档对象，
+   只有 ``/save`` 落盘。这样备份只做一次，用户也能整体放弃（刷新页面即可）。
+   原工具是每改一项就写盘（`main.py` 的 `_apply`），M3b **有意**改了这一点。
+2. **写回原存档必须 `confirm=true`** —— 否则返回 `need_confirm: true` 且文件字节不变。
+3. **写回前一定备份、写回后一定回传备份路径** —— 由 `BackupPolicy` 统一落点，
+   避免"新加的写入口忘了备份"。
+4. **数据表改动做陈旧性校验** —— 带 `original` 的改动在当前值不一致时被拒绝
+   （返回 `stale` 列表），不做按 path 盲写。
+
+**依赖的 core 能力**（manifest 的 `core_deps`）
 
 `core.engines`、`core.constants`、`core.formats.mv_save`、`core.formats.rgss_save`、
-`core.formats.lzstring`、`core.marshal.doc_model`、`core.safety.atomic`
+`core.formats.mv_mz_data`、`core.formats.rgss_data`、`core.formats.lzstring`、
+`core.marshal.doc_model`、`core.marshal.value_layer`、`core.safety.atomic`、
+`core.safety.backup`
 
 **实现文件**
 
 | 文件 | 角色 |
 | --- | --- |
-| `features/cheats/manifest.py` | 自描述与注册 |
+| `features/cheats/manifest.py` | 自描述与注册（**薄壳**：构造服务 + 声明页面） |
+| `features/cheats/routes.py` | **后端接线**：18 个端点 + `CheatsService` + `BackupPolicy`（M3b） |
+| `features/cheats/data_fields.py` | **可编辑字段的唯一规则表** + 扫描 / 陈旧性校验 / 写回编排 |
 | `core/engines.py` | 引擎识别 + 存档发现（与 translate 共用） |
-| `core/formats/mv_save.py` | MV/MZ 存档读写（LZString / zlib） |
-| `core/formats/rgss_save.py` | RGSS 存档读写（hash / contents 双布局、多流同步） |
+| `core/formats/mv_save.py` | MV/MZ 存档读写（LZString / zlib；**原子写**） |
+| `core/formats/rgss_save.py` | RGSS 存档读写（hash / contents 双布局、多流同步；**原子写**） |
+| `core/formats/mv_mz_data.py` | MV/MZ 数据表写回（数据表编辑复用翻译那条编排） |
+| `core/formats/rgss_data.py` | RGSS 数据表写回（含 `_set_scalar` 类型跟随） |
 | `core/marshal/doc_model.py` | Ruby Marshal 字节级保真 |
-| `core/safety/atomic.py` | 原子写回 + 自动备份 |
-| `ui/web/pages/cheats.js` | 前端页面 |
+| `core/safety/atomic.py`、`backup.py` | 原子写回 + 自动备份 + 清单还原 |
+| `ui/web/pages/cheats.js` | 前端页面（六张卡片） |
 
-**功能覆盖范围**
+**功能覆盖范围**（逐条对照 `docs/迁移对照表.md` §B，不得缩水）
 
 * 引擎：MV / MZ / VX Ace / VX / XP（2000/2003 仅识别）
 * 存档格式：`file*.rpgsave`（LZString）、`file*.rmmzsave`（zlib）、
   `Save*.rvdata2`、`Save*.rvdata`、`Save*.rxdata`
 * 可改：金币、步数、道具/武器/防具数量（含添加背包中原本不存在的物品）、
   角色等级/经验/HP/MP/TP/8 项属性加成/技能列表、开关、变量
-* 队伍成员（`party_ids`）：**原工具仅只读展示，无写回路径** —— 本工程保持等价，
-  如需新增请走「新增能力」流程
-* 安全：保存前自动备份、只改指定数值、其余字节级原样保留、原子写
+* **新增（M3b 补齐 B-16/B-17 的测试缺口）**：技能列表整体替换、开关**写回**
+  —— 原工具这两条没有独立断言，现已纳入 `test_routes.py` 与
+  `test_writeback_regressions.py`
+* **新增能力：游戏数据表编辑**（价格 / 攻击力 / 初始等级 / 掉落金币…，共 34 个字段规则）
+  —— 等价性上属于"超出原工具"，因此单独列出；走的是翻译功能同一条写回编排 +
+  陈旧性校验，不新增第三条写回路径
+* 队伍成员（`party_ids`）：**原工具仅只读展示，无写回路径** —— 本工程保持等价
+  （页面上明确标注"只读"），如需新增请走「新增能力」流程
+* 安全：写回前自动备份、只改指定字段、其余字节级原样保留、原子写、
+  多套存档目录提醒（原行为，见 `test_cheats_page.py`）
 
 ---
 

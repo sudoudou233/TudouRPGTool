@@ -11,16 +11,22 @@
 迁移说明：原工具是 tkinter 桌面 GUI（``rpgmaker_cheating_tool/main.py``，494 行，
 GUI 与业务逻辑混在一个类里）。按 docs/DECISIONS.md ADR-001，**逻辑层迁移、
 界面层重写**为 Web 页面。
+
+M3b：本文件改成与 ``features/translate/manifest.py`` 同一形态的**薄壳** ——
+只做"构造服务 + 委托路由 + 声明页面"，业务在 :mod:`features.cheats.routes`。
 """
 
 from __future__ import annotations
 
+from .routes import CheatsService, register_routes
+
+#: 功能自描述。必备字段：id / name / icon / version / description。
 MANIFEST = {
     "id": "cheats",
     "name": "存档修改",
     "icon": "改",
-    "version": "0.1.0",
-    "description": "读取存档并修改金币、步数、道具/武器/防具数量、角色属性与技能、开关与变量；保存前自动备份。",
+    "version": "0.3.0",
+    "description": "读取存档并修改金币、步数、道具/武器/防具数量、角色属性与技能、开关与变量；也能改游戏数据表（价格/攻击力/初始等级）；保存前自动备份。",
     "order": 20,
 
     "core_deps": (
@@ -28,9 +34,13 @@ MANIFEST = {
         "core.constants",
         "core.formats.mv_save",
         "core.formats.rgss_save",
+        "core.formats.mv_mz_data",
+        "core.formats.rgss_data",
         "core.formats.lzstring",
         "core.marshal.doc_model",
+        "core.marshal.value_layer",
         "core.safety.atomic",
+        "core.safety.backup",
     ),
 
     "api_prefix": "/api/cheats",
@@ -51,52 +61,19 @@ MANIFEST = {
 
 
 def register(ctx):
-    """把修改功能装配进应用（M1 骨架；业务链路在 M3b 接线）。"""
-    state = {"feature": "cheats", "status": "skeleton",
-             "detail": "M1 骨架：功能已注册，业务链路在 M3b 接线"}
+    """把修改功能装配进应用。
 
-    @ctx.get("/api/cheats/status", name="cheats_status")
-    def cheats_status(request=None):
-        """修改功能自身的状态（M1 为骨架占位）。"""
-        return dict(state)
-
-    @ctx.post("/api/cheats/detect", name="cheats_detect")
-    def cheats_detect(request=None):
-        """识别游戏目录的引擎并列出存档。
-
-        M1 已可用：走的是 core.engines（唯一实现），因此这条链路在 M1
-        就能端到端验证引擎识别与存档发现。
-        """
-        from core import engines
-        data = getattr(request, "data", None) or {}
-        game_dir = (data.get("dir") or "").strip()
-        if not game_dir:
-            return {"ok": False, "error": "请提供游戏目录 dir"}
-        info = engines.detect(game_dir)
-        if not info.get("engine"):
-            return {"ok": False, "error": info.get("error") or "未能识别引擎"}
-        saves = engines.list_saves(info, game_dir)
-        return {
-            "ok": True,
-            "engine": info["engine"],
-            "label": info["label"],
-            "summary": engines.describe(info),
-            "data_dir": info["data_dir"],
-            "save_dir": info["save_dir"],
-            "save_ext": info["ext"],
-            "supported": info["supported"],
-            "match": info["match"],
-            "saves": saves,
-            "save_dirs": [{"dir": d, "files": f}
-                          for d, f in engines.find_save_dirs(info, game_dir)],
-        }
-
+    与 translate 同一形态：构造功能自己的服务对象、把路由委托给 routes 模块。
+    本函数**只通过 ctx 暴露的接口**操作，不触碰 app / server 内部。
+    """
+    service = CheatsService(ctx)
+    count = register_routes(ctx, service)
     ctx.page(MANIFEST["pages"][0])
-    return "registered (skeleton)"
+    return "registered (%d routes)" % count
 
 
 def health():
-    """修改功能的健康检查。"""
+    """修改功能的健康检查：core 依赖 + 两条读写链路真的能构造。"""
     import importlib
     missing = []
     for name in MANIFEST["core_deps"]:
@@ -106,9 +83,28 @@ def health():
             missing.append("%s (%s: %s)" % (name, type(exc).__name__, exc))
     if missing:
         return {"status": "error", "detail": "缺少 core 依赖：" + "; ".join(missing)}
+
+    problems = []
+    # 数据字段规则表是 M3b 新增的"唯一真源"：空表 = 界面上一栏都没有
+    try:
+        from . import data_fields
+        for engine, table in (("mv", data_fields.MV_FIELD_RULES),
+                              ("vxace", data_fields.RGSS_FIELD_RULES)):
+            if not table:
+                problems.append("%s 的字段规则表为空" % engine)
+            for fname, rules in table.items():
+                for template, _label, kind in rules:
+                    if kind not in data_fields.KIND_OF:
+                        problems.append("%s/%s 的字段类型未知：%s"
+                                        % (engine, fname, kind))
+    except Exception as exc:
+        problems.append("字段规则表不可用：%s: %s" % (type(exc).__name__, exc))
+    if problems:
+        return {"status": "error", "detail": "；".join(problems)}
     return {"status": "ok",
-            "detail": "core 依赖齐全（%d 项）；engine 识别链路 M1 已可用"
-                      % len(MANIFEST["core_deps"])}
+            "detail": "core 依赖齐全（%d 项）；MV/MZ 与 RGSS 的字段规则表各 %d 个文件"
+                      % (len(MANIFEST["core_deps"]),
+                         len(data_fields.MV_FIELD_RULES) + len(data_fields.RGSS_FIELD_RULES))}
 
 
 MANIFEST["health"] = health

@@ -5,13 +5,16 @@ RPG Maker MV / MZ 存档读写（``file*.rpgsave`` / ``file*.rmmzsave``）。
 @feature  cheats
 @layer    core
 @public   GameDataMV, SaveFileMV, META_KEYS
-@depends  core.formats.jsoncodec
-@tested   tests/compat/test_formats_compat.py
+@depends  core.formats.jsoncodec, core.safety.atomic
+@tested   tests/compat/test_formats_compat.py, tests/compat/test_m2a_regressions.py,
+          tests/features/cheats/test_routes.py
 @footprint docs/MODULES.md#coreformats
 @note     vendored：来自 rpgmaker_cheating_tool/mvdata.py。
 @note     M2b 已把 JSON / 压缩 / JsonEx 元数据约定收敛到
 @note     core/formats/jsoncodec.py（与 mv_mz_data 共用一份实现），
 @note     本文件只保留"改哪个键、怎么改"的业务规则。
+@note     **M3b 修复 B-02 残留**：save() 原先直接 ``open(path, 'wb')``，
+@note     写一半中断就把用户存档毁了 —— 现在走 core.safety.atomic。
 
 MV 存档（``www/save/file*.rpgsave``）是 LZString(base64) 的 JSON，
 对象带 JsonEx 元数据键（``@c`` / ``@`` / ``@r`` / ``@a``）。
@@ -25,6 +28,7 @@ import json
 import os
 
 from ..constants import PARAMS
+from ..safety import atomic
 from . import jsoncodec
 
 #: JsonEx 元数据键（真源在 jsoncodec）
@@ -276,7 +280,13 @@ class SaveFileMV:
 
     # ---------------------------------------------------------------- output
     def save(self, path=None):
+        """写回存档。
+
+        ⚠ **B-02 残留修复（M3b）**：原实现是 ``open(path, 'wb')`` 直接截断
+        写入 —— 写到一半断电/异常就把玩家存档彻底毁了。现在走
+        :func:`core.safety.atomic.atomic_write_bytes`（临时文件 + fsync +
+        ``os.replace``）：要么完整写入，要么原文件一个字节都不变。
+        """
         path = path or self.path
-        with open(path, 'wb') as f:
-            f.write(self._dump(self.data, self.engine))
+        atomic.atomic_write_bytes(path, self._dump(self.data, self.engine))
         return path

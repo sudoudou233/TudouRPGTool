@@ -79,6 +79,28 @@ class TestCheatsModule(unittest.TestCase):
         health = self.module.health()
         self.assertEqual(health["status"], "ok", health.get("detail"))
 
+    def test_register_report_is_not_skeleton(self):
+        """**M3b 已接线**：注册报告必须报出路由数，而不是 skeleton。"""
+        from core.context import AppContext, Router
+        from features.cheats import manifest as cheats_manifest
+        ctx = AppContext(router=Router())
+        report = cheats_manifest.register(ctx)
+        self.assertIn("routes", report)
+        self.assertNotIn("skeleton", report)
+
+    def test_deprecated_skeleton_status_is_gone(self):
+        """M1 的 ``/api/cheats/status`` 骨架响应不能再出现。"""
+        from core.context import AppContext, Router
+        from features.cheats import manifest as cheats_manifest
+        ctx = AppContext(router=Router())
+        cheats_manifest.register(ctx)
+        handler = staticmethod(ctx.router.resolve(
+            "GET", "/api/cheats/status")[0].handler).__func__
+        payload = handler(None)
+        self.assertNotEqual(payload.get("status"), "skeleton")
+        self.assertTrue(payload["ok"])
+        self.assertIn("actor_attrs", payload)
+
 
 class TestDetectEndpoint(unittest.TestCase):
     """``/api/cheats/detect`` 在 M1 就已可用，因此必须真的测通。"""

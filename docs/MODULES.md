@@ -15,6 +15,8 @@
 | 支持的引擎种类要增加 | `core/constants.py` → `core/engines.py` → `core/formats/*` |
 | 某类游戏识别不出来 | `core/engines.py`（判据表在 §core/engines.py） |
 | 存档读不出来 / 读出来是乱码 | `core/formats/mv_save.py` 或 `rgss_save.py` → `core/marshal/` |
+| 改存档后没生效（界面说成功） | 先查写回层的"有没有值"判据：**`translated=0`/`False` 不能被当成"没有值"**（N-16） |
+| 改了数据表却提示"值不一致" | `features/cheats/data_fields.py` 的 `verify_original`（陈旧性校验）；重读一次数据即可 |
 | 译文写回后游戏崩了 | `core/formats/mv_mz_data.py` 或 `rgss_data.py` 的 `apply_to_files` |
 | 写盘要更安全 | `core/safety/atomic.py`（唯一写盘手段） |
 | 备份/还原行为不对 | `core/safety/backup.py` |
@@ -211,10 +213,12 @@ atomic  ←  backup  ←  builder  →  fontutil
 | `features/translate/routes.py` | **翻译功能的后端接线**（M3a）：扫描 / 编辑 / 翻译 / 生成汉化版 / 备份还原，17 个端点 | `TranslateService`、`register_routes()`、`PROVIDERS`、`session_id_for()`、`session_path_for()`、`MAX_PAGE_SIZE`、`DEFAULT_PAGE_SIZE` | `features/translate/manifest.py` |
 | `features/translate/translators.py` | 4 个翻译引擎适配器 + 批量翻译执行器（vendored） | `build_translator`、`translate_entries`、`TranslateError`、`TruncatedError`、`GoogleTranslator`、`OpenAICompatibleTranslator`、`DeepLTranslator`、`_http` | `features/translate/routes.py` |
 | `features/translate/session.py` | 翻译会话与进度持久化（vendored） | `Session`、`ScanOptions`、`DEFAULT_OPTIONS` | `features/translate/routes.py` |
-| `features/cheats/manifest.py` | 修改功能的自我描述与注册 | `MANIFEST`、`register()`、`health()` | `core/registry.py` |
+| `features/cheats/manifest.py` | 修改功能的自我描述与注册（**薄壳**） | `MANIFEST`、`register()`、`health()` | `core/registry.py` |
+| `features/cheats/routes.py` | **修改功能的后端接线**（M3b）：读档 / 改档 / 写回 / 数据表编辑 / 备份还原，18 个端点 | `CheatsService`、`register_routes()`、`BackupPolicy`、`ACTOR_ATTRS`、`EDIT_KINDS`、`PAID_FOR` | `features/cheats/manifest.py` |
+| `features/cheats/data_fields.py` | **可编辑字段的唯一规则表**（MV/MZ 与 RGSS 各一份）+ 扫描 / 陈旧性校验 / 写回编排 | `MV_FIELD_RULES`、`RGSS_FIELD_RULES`、`rules_for_file()`、`scan_data()`、`build_entries()`、`set_in_data()`、`verify_original()`、`expected_value()`、`KIND_OF` | `features/cheats/routes.py` |
 | `features/cheats/__init__.py` | 包标记 | `manifest` | — |
 
-**功能注册的路由**（M3a 现状）：
+**功能注册的路由**（M3a + M3b 现状）：
 
 | 路由 | 功能 | 状态 |
 | --- | --- | --- |
@@ -233,13 +237,24 @@ atomic  ←  backup  ←  builder  →  fontutil
 | `GET /api/translate/backups` | translate | **可用**（列出备份及其清单） |
 | `POST /api/translate/restore` | translate | **可用**（还原前自动再备份一次） |
 | `POST /api/translate/open_dir` | translate | **可用**（在文件管理器中打开目录） |
-| `GET /api/cheats/status` | cheats | 骨架占位 |
-| `POST /api/cheats/detect` | cheats | **可用**（引擎识别 + 存档发现，走 `core/engines.py`） |
+| `GET /api/cheats/status` | cheats | **可用**（功能状态 + 已打开上下文 + 可编辑属性清单） |
+| `POST /api/cheats/detect` | cheats | **可用**（无状态识别：引擎判据 + 数据/存档目录） |
+| `POST /api/cheats/open` | cheats | **可用**（识别并加载名字表，记住上下文） |
+| `POST /api/cheats/pick_folder` | cheats | **可用**（原生文件夹对话框） |
+| `GET /api/cheats/saves` | cheats | **可用**（存档列表 + 备份列表 + 当前存档） |
+| `POST /api/cheats/load` | cheats | **可用**（打开存档；路径必须在本游戏存档目录内） |
+| `GET /api/cheats/party`、`actors`、`vars` | cheats | **可用**（读队伍/角色/开关变量，带可读名字） |
+| `POST /api/cheats/party`、`actor`、`var` | cheats | **可用**（改**内存**，不落盘） |
+| `POST /api/cheats/save` | cheats | **可用**（写回存档；必须先备份，覆盖必须 `confirm=true`） |
+| `GET`/`POST /api/cheats/data` | cheats | **可用**（列可编辑字段 / 写回数据表，含陈旧性校验） |
+| `GET /api/cheats/backups`、`POST /api/cheats/restore` | cheats | **可用**（备份列表 / 还原，还原前再备份） |
+| `POST /api/cheats/open_dir` | cheats | **可用**（在文件管理器中打开目录） |
 
-**⚠ 后端已就绪、前端页面仍是 M1 骨架**：`ui/web/pages/translate.js` 尚未接
-这些端点（M4 统一界面时完成）。接口清单由
-`tests/features/translate/test_routes.py::TestRouteRegistration.EXPECTED`
-**双向**核对（少一个或多一个都红灯）。
+**接口契约由测试双向核对**：
+`tests/features/translate/test_routes.py::TestRouteRegistration.EXPECTED` 与
+`tests/features/cheats/test_routes.py::TestRouteRegistration.EXPECTED`
+（少一个或多一个都红灯），页面侧由
+`tests/integration/test_translate_page.py` / `test_cheats_page.py` 核对。
 
 ---
 
@@ -332,7 +347,9 @@ atomic  ←  backup  ←  builder  →  fontutil
 | `core/jobs.py`、`ui/server.py`、`ui/web/dom.js` | 全部长任务与页面 |
 | `core/formats/jsoncodec.py` | MV/MZ 两条路径（游戏数据 + 存档） |
 | `core/formats/mv_mz_data.py`、`rgss_data.py`、`core/textutil.py` | 仅 `translate` |
-| `core/formats/mv_save.py`、`rgss_save.py`、`core/marshal/` | 仅 `cheats`（`marshal` 也被 `translate` 的 RGSS 数据路径使用） |
-| `core/safety/backup.py`、`builder.py`、`fontutil.py` | 仅 `translate` |
-| `core/sysdialog.py` | 仅 `translate` 的两个选路径端点（将来别的功能也能直接用） |
-| `features/translate/routes.py` | 仅 `translate`（前端页面 M4 接入） |
+| `core/formats/mv_save.py`、`rgss_save.py`、`core/marshal/` | 主要 `cheats`（`marshal` 也被 `translate` 的 RGSS 数据路径使用） |
+| `core/safety/backup.py` | `translate`（生成汉化版/还原）与 `cheats`（写回存档/数据表前的备份）**共用** |
+| `core/safety/builder.py`、`fontutil.py` | 仅 `translate` |
+| `core/sysdialog.py` | 两个功能的"选路径"端点（`pick_folder` / `pick_font`） |
+| `features/translate/routes.py` | 仅 `translate` |
+| `features/cheats/routes.py`、`data_fields.py` | 仅 `cheats` |

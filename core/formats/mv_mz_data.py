@@ -361,9 +361,47 @@ def _set_by_path(data, path):
     return cur, key
 
 
+def _entry_field(entry, name, default=None):
+    """从条目取字段（兼容 dict 与对象两种形态）。"""
+    if isinstance(entry, dict):
+        return entry.get(name, default)
+    return getattr(entry, name, default)
+
+
+def _has_field(entry, name):
+    """条目里是否**存在**该字段（区别于"值是否为真"）。"""
+    if isinstance(entry, dict):
+        return name in entry
+    return hasattr(entry, name)
+
+
+#: ``expect`` 字段的比较：``"3"``/``3``、``True``/``1`` 都视为相同
+def _same_value(a, b):
+    if isinstance(a, bool) or isinstance(b, bool):
+        return (1 if a else 0) == (1 if b else 0)
+    try:
+        return int(a) == int(b)
+    except (TypeError, ValueError):
+        return str(a) == str(b)
+
+
 def apply_to_files(game_info, entries_by_file, progress=None):
-    """Patch JSON data files in place (in a copy made beforehand)."""
-    stats = {"files": 0, "entries": 0}
+    """把条目写回 JSON 数据文件（就地；调用方负责先备份/复制）。
+
+    两种用途共用本函数：
+
+    * **翻译**：条目的 ``translated`` 是译文，``status`` 决定是否写；
+    * **游戏数据修改**（M3b）：``translated`` 是新的数字/布尔值。
+
+    因此这里的判据是"**有没有这个键**"而不是"值真不真" ——
+    否则把价格改成 ``0``、把开关改成 ``false`` 都会被当成"没有译文"而 **静默丢弃**
+    （M3b 实测踩到：这类"想设成 0 却改不了"的 bug 极难从界面看出来）。
+
+    ``expect``（可选）：条目可以带上"我以为的原值"，只有当前值与它一致时才写。
+    这是 ``rgss_data`` 的 B-13 同类防线 —— 数据在别处被改过时宁可跳过，
+    也不要按 path 盲写。
+    """
+    stats = {"files": 0, "entries": 0, "skipped": 0}
     data_dir = game_info["data_dir"]
     for fname, entries in entries_by_file.items():
         if not fname.endswith(".json"):
@@ -377,18 +415,32 @@ def apply_to_files(game_info, entries_by_file, progress=None):
             continue
         changed = False
         for entry in entries:
-            if not entry.get("translated") or entry.get("status") != "translated":
+            if entry is None:
+                continue
+            status = _entry_field(entry, "status")
+            if status is not None and status != "translated":
+                continue
+            if not _has_field(entry, "translated"):
+                continue
+            value = _entry_field(entry, "translated")
+            if value is None:
                 continue
             try:
-                parent, key = _set_by_path(data, entry["path"])
-                if isinstance(parent, list):
-                    parent[int(key)] = entry["translated"]
-                else:
-                    parent[key] = entry["translated"]
-                changed = True
-                stats["entries"] += 1
+                parent, key = _set_by_path(data, _entry_field(entry, "path"))
             except (KeyError, ValueError, IndexError):
+                stats["skipped"] += 1
                 continue
+            if _has_field(entry, "expect"):
+                current = parent[int(key)] if isinstance(parent, list) else parent[key]
+                if not _same_value(current, _entry_field(entry, "expect")):
+                    stats["skipped"] += 1
+                    continue
+            if isinstance(parent, list):
+                parent[int(key)] = value
+            else:
+                parent[key] = value
+            changed = True
+            stats["entries"] += 1
         if changed:
             _save_data_file(full, fname, data, wrapped, header)
             stats["files"] += 1

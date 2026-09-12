@@ -239,13 +239,128 @@ class TestB02NonAtomicWrite(unittest.TestCase):
         self.assertEqual(offenders, [],
                          "**B-02**：backup 仍有直接写模式 open：%s" % offenders)
 
+    def test_save_modules_are_atomic(self):
+        """**M3b 补齐 B-02 的最后一处**：改存档也必须是原子写。
+
+        M2a 只覆盖了"游戏数据"与"备份/清单"三条路径；``mv_save`` /
+        ``rgss_save`` 的 ``save()`` 当时还没接线，因此留下了
+        ``open(path, 'wb')`` 直接截断 —— 而**改存档**恰恰是这个工具里
+        最容易毁掉玩家数据的操作（写到一半中断 = 存档报废）。
+        """
+        for rel in ("core/formats/mv_save.py", "core/formats/rgss_save.py"):
+            with self.subTest(module=rel):
+                offenders = self._direct_write_opens(rel)
+                self.assertEqual(offenders, [],
+                                 "**B-02**：%s 仍有直接写模式 open：%s"
+                                 % (rel, offenders))
+                src = io.open(os.path.join(_ROOT, rel), encoding="utf-8").read()
+                self.assertIn("atomic_write", src,
+                              "**B-02**：%s 必须走 core.safety.atomic" % rel)
+
     def test_atomic_write_actually_used(self):
         for rel in ("core/formats/rgss_data.py", "core/formats/mv_mz_data.py",
-                    "core/safety/builder.py", "core/safety/backup.py"):
+                    "core/safety/builder.py", "core/safety/backup.py",
+                    "core/formats/mv_save.py", "core/formats/rgss_save.py"):
             with self.subTest(module=rel):
                 src = io.open(os.path.join(_ROOT, rel), encoding="utf-8").read()
                 self.assertIn("atomic_write", src,
                               "**B-02**：%s 必须走 core.safety.atomic" % rel)
+
+
+class TestB02SaveWritebackSurvivesFailure(unittest.TestCase):
+    """**B-02（M3b 补）**：存档写入失败时，原存档必须一个字节都不变。
+
+    只做 AST 检查不够 —— 要看**行为**：让 ``os.replace`` 失败，模拟"写到一半
+    出错"，然后确认磁盘上的存档还是原来那份。
+    """
+
+    def _make_mv_save(self, tmp):
+        from core.formats import mv_save
+        data = {
+            "party": {"_gold": 1000, "_steps": 500, "_items": {}, "_weapons": {},
+                      "_armors": {}, "_actors": {"@a": [1]}},
+            "switches": {"_data": {"@a": [True]}},
+            "variables": {"_data": {"@a": [0]}},
+            "actors": {"_data": {"@a": [None, {"_actorId": 1, "_level": 5,
+                                               "_exp": {"1": 0}, "_hp": 10,
+                                               "_mp": 5, "_paramPlus": {"@a": [0]}}]}},
+        }
+        path = os.path.join(tmp, "file0.rpgsave")
+        with open(path, "wb") as f:
+            f.write(mv_save.SaveFileMV._dump(data, "mv"))
+        return path
+
+    def test_mv_save_failure_keeps_original_bytes(self):
+        from core.formats import mv_save
+        from core.safety import atomic
+        with tempfile.TemporaryDirectory(prefix="b02save_") as tmp:
+            path = self._make_mv_save(tmp)
+            with open(path, "rb") as f:
+                original = f.read()
+            save = mv_save.SaveFileMV(path, engine="mv")
+            save.set_gold(999999)
+
+            real_replace = atomic.os.replace
+
+            def boom(src, dst):
+                raise OSError("模拟 replace 失败")
+
+            atomic.os.replace = boom
+            try:
+                with self.assertRaises(atomic.AtomicWriteError):
+                    save.save(path)
+            finally:
+                atomic.os.replace = real_replace
+
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), original,
+                                 "**B-02**：存档写入失败后原文件必须字节不变")
+
+    def test_rgss_save_failure_keeps_original_bytes(self):
+        """RGSS 侧（Marshal 节点树）同样要满足这一条。"""
+        from core.formats import rgss_save
+        from core.marshal import doc_model as D
+        from core.safety import atomic
+
+        def sym(name):
+            return D.Symbol(name.encode("utf-8"))
+
+        def obj(class_name, ivars):
+            return D.ObjectNode(sym(class_name), [
+                (sym(k if k.startswith("@") else "@" + k), v)
+                for k, v in ivars.items()])
+
+        with tempfile.TemporaryDirectory(prefix="b02rgss_") as tmp:
+            path = os.path.join(tmp, "Save01.rvdata2")
+            tree = D.Hash([
+                (sym("party"), obj("Game_Party", {
+                    "gold": D.Fixnum(1000), "steps": D.Fixnum(500),
+                    "items": D.Hash([]), "weapons": D.Hash([]),
+                    "armors": D.Hash([]), "actors": D.Array([D.Fixnum(1)])})),
+            ])
+            with open(path, "wb") as f:
+                f.write(D.dumps(tree))
+            with open(path, "rb") as f:
+                original = f.read()
+
+            save = rgss_save.SaveFile(path, layout="hash")
+            save.set_gold(999999)
+
+            real_replace = atomic.os.replace
+
+            def boom(src, dst):
+                raise OSError("模拟 replace 失败")
+
+            atomic.os.replace = boom
+            try:
+                with self.assertRaises(atomic.AtomicWriteError):
+                    save.save(path)
+            finally:
+                atomic.os.replace = real_replace
+
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), original,
+                                 "**B-02**：存档写入失败后原文件必须字节不变")
 
 
 class TestB03FontFallbackRestorable(unittest.TestCase):

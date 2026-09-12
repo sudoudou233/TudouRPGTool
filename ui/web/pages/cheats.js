@@ -1,115 +1,887 @@
 /* ---------------------------------------------------------------------------
- * 存档修改功能页
+ * 存档修改功能页 —— 读档 / 改数值 / 写回 / 游戏数据表编辑 / 备份还原
  *
  * @feature  cheats
  * @layer    ui
  * @public   render
  * @depends  /dom.js, /api/cheats/*
- * @tested   tools/check_footprint.py
- * @footprint docs/FEATURES.md#cheats
+ * @tested   tests/integration/test_cheats_page.py（静态契约）
+ * @footprint docs/UI_SPEC.md
  *
- * M1 状态：**引擎识别链路已可用**（走 core.engines 唯一实现），
- * 读档 / 改数值 / 存档的交互在 M3b 接线（逻辑层迁移自
- * rpgmaker_cheating_tool/{engines,rpgdata,mvdata,rmarshal,lzstring}.py，
- * 界面层按 ADR-001 重写为 Web 页面）。
+ * 迁移来源：rpgmaker_cheating_tool/main.py 的 tkinter 界面
+ * （顶栏选目录 / 存档下拉 / 队伍·金币页 / 道具页 / 角色页 / 开关变量页 / 状态栏）。
+ * 按 ADR-001 **逻辑层迁移、界面层重写**，因此这里是"同样的能力、不同的交互"，
+ * 逐条对照 docs/迁移对照表.md §B.2（B-30 ～ B-37）。
+ *
+ * 硬约束（docs/UI_SPEC.md §5）：
+ *   * 默认零破坏 —— 改数值只改**内存**，点「保存」才写盘，且写盘前自动备份
+ *   * 破坏性操作二次确认，并在文案里写明改哪些文件、备份在哪里
+ *   * 覆盖类按钮用 .btn.danger；保存后**展示备份路径**
+ *   * 页面不得写具体颜色值，只用 tokens.css 令牌与 components.css 的类
+ *
+ * 与原工具的一处**有意差异**：原工具每次改一项就立刻写盘（`main.py` 的
+ * `_apply` 直接 save），一旦改错只能靠"撤销"按钮逐项回退。这里改成
+ * "先改内存、再统一保存"，于是备份只做一次、也能整体放弃（刷新页面即可）。
  * ------------------------------------------------------------------------- */
 
-import { el, getJSON, postJSON, toast } from '/dom.js';
+import {
+  el, getJSON, postJSON, toast, confirmDialog, escapeHTML,
+} from '/dom.js';
+
+/** 存档下拉 / 列表里显示的时间与体积 */
+const PAGE_SWITCHES = 60;
+
+const state = {
+  game: null,
+  saves: [],
+  current: null,
+  dirty: false,
+  vars: { key: 'switches', offset: 0, view: null },
+  data: { fields: [], files: [], filter: '' },
+  actorAttrs: [],
+  itemKinds: [],
+  dataHost: null,
+  actorsHost: null,
+  varsHost: null,
+  statusHost: null,
+};
 
 export async function render(host) {
-  const dirInput = el('input', { type: 'text', placeholder: '例如 D:\\gamess\\某游戏\\game' });
-  const resultBox = el('div');
-  const detectBtn = el('button', {
-    class: 'btn primary', type: 'button', text: '识别引擎并列出存档',
-    onclick: () => runDetect(dirInput.value.trim(), detectBtn, resultBox),
-  });
+  state.dirty = false;
+  state.current = null;
 
-  host.append(el('section', { class: 'card' }, [
-    el('h2', {}, [
-      el('span', { class: 'step', text: '1' }),
-      document.createTextNode('选择游戏目录'),
-    ]),
-    el('div', { class: 'card-sub', text: '选择包含 www / data / Data 文件夹的那一层。识别与存档发现走 core/engines.py（全工程唯一实现）。' }),
-    el('div', { class: 'row' }, [dirInput, detectBtn]),
-  ]));
+  host.append(buildDirCard());
+  host.append(buildSaveCard());
+  host.append(buildPartyCard());
+  host.append(buildActorsCard());
+  host.append(buildVarsCard());
+  host.append(buildDataTableCard());
 
-  host.append(el('section', { class: 'card' }, [
-    el('h2', {}, [
-      el('span', { class: 'step', text: '2' }),
-      document.createTextNode('识别结果'),
-    ]),
-    resultBox,
-  ]));
+  state.statusHost = el('section', { class: 'card' });
+  host.append(state.statusHost);
+  renderStatus();
 
-  host.append(el('section', { class: 'card' }, [
-    el('h2', {}, [
-      el('span', { class: 'step', text: '3' }),
-      document.createTextNode('后续里程碑将在此接入'),
-    ]),
-    el('ul', { class: 'muted' }, [
-      el('li', { text: 'M2a：修 XP/VX 的 marshal 写回字节漂移（P0），建立可信测试基线' }),
-      el('li', { text: 'M3b：读档 → 改金币/步数/道具/角色/开关变量 → 原子写回 + 自动备份 + 还原入口' }),
-      el('li', { text: 'M4：统一令牌与交互范式' }),
-    ]),
-  ]));
-
-  resultBox.append(el('div', { class: 'empty', text: '尚未识别。填入游戏目录后点上面的按钮。' }));
+  await loadStatus();
 }
 
-async function runDetect(dir, button, box) {
-  box.innerHTML = '';
-  if (!dir) {
-    toast('请先填写游戏目录', 'warn');
+/* ---------------------------------------------------------------------------
+ * 卡片 1：游戏目录
+ * ------------------------------------------------------------------------- */
+function buildDirCard() {
+  const dirInput = el('input', {
+    type: 'text', id: 'ch-dir',
+    placeholder: '例如 D:\\games\\我的游戏（含 www / data / Data 的那一层）',
+  });
+  const browseBtn = el('button', { class: 'btn', type: 'button', text: '浏览…' });
+  browseBtn.addEventListener('click', async () => {
+    browseBtn.disabled = true;
+    try {
+      const res = await postJSON('/api/cheats/pick_folder', { initial: dirInput.value });
+      if (res.cancelled || !res.dir) return;
+      dirInput.value = res.dir;
+      await openGame(res.dir);
+    } catch (err) {
+      toast('无法打开系统对话框：' + err.message + '（可直接粘贴路径）', 'warn', 8000);
+    } finally {
+      browseBtn.disabled = false;
+    }
+  });
+
+  const openBtn = el('button', { class: 'btn primary', type: 'button', text: '读取游戏数据' });
+  openBtn.addEventListener('click', () => openGame(dirInput.value.trim()));
+
+  return el('section', { class: 'card' }, [
+    el('h2', {}, [el('span', { class: 'step', text: '1' }),
+      document.createTextNode('游戏目录')]),
+    el('div', {
+      class: 'card-sub',
+      text: '选择包含 www / data / Data 文件夹的那一层。识别与存档发现走 core/engines.py（全工程唯一实现）。',
+    }),
+    el('div', { class: 'row' }, [dirInput, browseBtn, openBtn]),
+    el('div', { class: 'chips', id: 'ch-engine' }),
+  ]);
+}
+
+async function openGame(dir) {
+  if (!dir) { toast('请先填写游戏目录', 'warn'); return; }
+  try {
+    const res = await postJSON('/api/cheats/open', { dir });
+    state.game = res.game;
+    applyEngineChips(res);
+    toast(`已识别：${res.summary || ''}（${res.saves} 个存档）`, 'ok', 6000);
+    await loadSaves();
+    await loadData(false);
+  } catch (err) {
+    toast('读取失败：' + err.message, 'error', 12000);
+  }
+}
+
+function applyEngineChips(res) {
+  const host = document.getElementById('ch-engine');
+  if (!host) return;
+  host.textContent = '';
+  if (!res || !res.ok) {
+    host.append(el('span', { class: 'chip', text: '尚未识别引擎' }));
     return;
   }
-  button.disabled = true;
-  box.append(el('div', { class: 'muted', text: '识别中…' }));
+  const game = res.game || {};
+  host.append(el('span', { class: 'chip ok', html: `引擎 <b>${escapeHTML(game.engine || '?')}</b>` }));
+  host.append(el('span', { class: 'chip', text: game.label || '' }));
+  host.append(el('span', { class: 'chip', text: game.game_dir || '' }));
+}
+
+/* ---------------------------------------------------------------------------
+ * 卡片 2：存档选择
+ * ------------------------------------------------------------------------- */
+function buildSaveCard() {
+  const listHost = el('div', { id: 'ch-saves' });
+  return el('section', { class: 'card' }, [
+    el('h2', {}, [el('span', { class: 'step', text: '2' }),
+      document.createTextNode('选择存档')]),
+    el('div', {
+      class: 'card-sub',
+      text: '读入存档后可改数值。改动先放在内存里，点「保存存档」才写盘 —— 写盘前会自动备份。',
+    }),
+    listHost,
+  ]);
+}
+
+async function loadSaves() {
+  const host = document.getElementById('ch-saves');
+  if (!host) return;
+  host.textContent = '';
+  let res;
   try {
-    const res = await postJSON('/api/cheats/detect', { dir });
-    box.innerHTML = '';
-    if (!res.ok) {
-      box.append(el('div', { class: 'error-text', text: res.error || '识别失败' }));
-      return;
-    }
-    box.append(el('div', { class: 'chips' }, [
-      el('span', { class: 'chip ok', html: `引擎 <b>${res.label}</b>` }),
-      el('span', { class: 'chip', html: `存档 <b>${(res.saves || []).length}</b> 个` }),
-      res.match ? el('span', { class: 'chip', html: `判据 <b>${res.match}</b>` }) : null,
-      res.supported ? null : el('span', { class: 'chip warn', text: '仅识别，不支持修改' }),
+    res = await getJSON('/api/cheats/saves');
+  } catch (err) {
+    host.append(el('div', { class: 'hint', text: err.message }));
+    return;
+  }
+  state.saves = res.saves || [];
+  if (!state.saves.length) {
+    host.append(el('div', { class: 'empty', text: '这个游戏目录下没有找到存档。' }));
+    return;
+  }
+
+  /* 多套存档（自动存档等）必须提醒 —— 迁移对照表 B-31/B-03 的原行为，
+     漏掉会让用户以为"只改了一个存档"，实际游戏读的是另一个 */
+  const dirs = [...new Set(state.saves.map((s) => s.dir))];
+  if (dirs.length > 1) {
+    host.append(el('div', {
+      class: 'warn-text',
+      text: `注意：发现 ${dirs.length} 个含存档的目录（可能有自动存档等第二套存档），`
+        + '修改时请确认改的是游戏实际读取的那一个。',
+    }));
+  }
+  const dirHost = el('div', { class: 'chips' });
+  for (const dir of dirs) {
+    dirHost.append(el('span', { class: 'chip mono', text: dir }));
+  }
+  host.append(dirHost);
+
+  const tbody = el('tbody', {});
+  for (const save of state.saves) {
+    const current = res.current && save.path === res.current;
+    tbody.append(el('tr', {}, [
+      el('td', {}, [el('span', { class: 'code', text: save.name })]),
+      el('td', { class: 'nowrap', text: save.time }),
+      el('td', { class: 'num', text: fmtSize(save.size) }),
+      el('td', { class: 'hint mono', text: save.dir }),
+      el('td', {}, [current
+        ? el('span', { class: 'tag ok', text: '已载入' })
+        : el('button', {
+          class: 'btn sm primary', type: 'button', text: '载入',
+          onclick: () => loadSave(save.path),
+        })]),
     ]));
-    box.append(el('div', { class: 'grid', style: { marginTop: 'var(--sp-4)' } }, [
-      kv('数据目录', res.data_dir),
-      kv('存档目录', res.save_dir),
-      kv('存档扩展名', res.save_ext),
+  }
+  host.append(el('div', { class: 'table-wrap' }, [
+    el('table', {}, [
+      el('thead', {}, [el('tr', {}, [
+        el('th', { text: '存档' }), el('th', { text: '时间' }),
+        el('th', { text: '大小' }), el('th', { text: '目录' }), el('th', { text: '操作' }),
+      ])]),
+      tbody,
+    ]),
+  ]));
+
+  if (res.backups && res.backups.length) {
+    host.append(el('div', {
+      class: 'hint',
+      text: `游戏目录下已有 ${res.backups.length} 个备份（最新的：${res.backups[0].name}）。`,
+    }));
+  }
+}
+
+async function loadSave(path) {
+  try {
+    const res = await postJSON('/api/cheats/load', { path });
+    state.current = res.path;
+    state.dirty = false;
+    renderParty(res.party);
+    renderActors(res.actors);
+    await loadVars('switches', 0);
+    await loadSaves();
+    await loadBackups();
+    renderStatus();
+    toast('存档已载入', 'ok');
+  } catch (err) {
+    toast('载入失败：' + err.message, 'error', 12000);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * 卡片 3：金币 / 步数 / 道具
+ * ------------------------------------------------------------------------- */
+function buildPartyCard() {
+  const gold = el('input', { type: 'number', id: 'ch-gold' });
+  const steps = el('input', { type: 'number', id: 'ch-steps' });
+  const applyBtn = el('button', { class: 'btn primary', type: 'button', text: '应用数值' });
+  applyBtn.addEventListener('click', () => applyParty({}));
+
+  const itemHost = el('div', { id: 'ch-items' });
+
+  return el('section', { class: 'card' }, [
+    el('h2', {}, [el('span', { class: 'step', text: '3' }),
+      document.createTextNode('金币 / 步数 / 道具')]),
+    el('div', { class: 'card-sub', text: '改动只改内存，需要点最下方的「保存存档」才会写回文件。' }),
+    el('div', { class: 'grid' }, [
+      field('金币', gold),
+      field('步数', steps),
+      el('div', { class: 'field' }, [el('label', { text: ' ' }), applyBtn]),
+    ]),
+    itemHost,
+  ]);
+}
+
+function field(label, control) {
+  return el('div', { class: 'field' }, [el('label', { text: label }), control]);
+}
+
+function renderParty(party) {
+  if (!party) return;
+  const gold = document.getElementById('ch-gold');
+  const steps = document.getElementById('ch-steps');
+  if (gold) gold.value = party.gold === null || party.gold === undefined ? '' : party.gold;
+  if (steps) steps.value = party.steps === null || party.steps === undefined ? '' : party.steps;
+
+  const host = document.getElementById('ch-items');
+  if (!host) return;
+  host.textContent = '';
+
+  if (party.party && party.party.length) {
+    host.append(el('div', { class: 'row' }, [
+      el('span', { class: 'hint', text: '队伍成员' }),
+      el('span', { class: 'chips' }, party.party.map((member) =>
+        el('span', { class: 'chip', html: `${escapeHTML(member.name)} <b>#${member.id}</b>` }))),
     ]));
-    if ((res.saves || []).length) {
-      box.append(el('div', { class: 'divider' }));
-      box.append(el('div', { class: 'table-wrap' }, [
-        el('table', {}, [
-          el('thead', {}, [el('tr', {}, [el('th', { text: '存档文件' })])]),
-          el('tbody', {}, res.saves.map((name) => el('tr', {}, [
-            el('td', {}, [el('span', { class: 'code', text: name })]),
-          ]))),
-        ]),
+    host.append(el('div', {
+      class: 'hint',
+      text: '队伍成员只读显示 —— 原工具也只能看不能改（docs/FEATURES.md 已标注这一等价性）。',
+    }));
+  }
+
+  const kinds = state.itemKinds.length ? state.itemKinds
+    : Object.keys(party.items || {});
+  for (const kind of kinds) {
+    const rows = (party.items || {})[kind] || [];
+    const label = { items: '道具', weapons: '武器', armors: '防具' }[kind] || kind;
+    const tbody = el('tbody', {});
+    if (!rows.length) {
+      tbody.append(el('tr', {}, [
+        el('td', { class: 'hint', colspan: '3', text: '（空）' }),
       ]));
     }
-    if ((res.save_dirs || []).length > 1) {
-      box.append(el('div', { class: 'warn-text', text: `注意：发现 ${res.save_dirs.length} 个含存档的目录，可能存在自动存档等第二套存档，修改时需全部处理。` }));
+    for (const row of rows) {
+      const input = el('input', { type: 'number', value: String(row.count), min: '0' });
+      input.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') applyParty({ [kind]: [{ id: row.id, count: input.value }] });
+      });
+      tbody.append(el('tr', {}, [
+        el('td', {}, [
+          el('div', { text: row.name }),
+          el('div', { class: 'hint mono', text: `#${row.id}` }),
+        ]),
+        el('td', {}, [input]),
+        el('td', {}, [el('button', {
+          class: 'btn sm', type: 'button', text: '应用',
+          onclick: () => applyParty({ [kind]: [{ id: row.id, count: input.value }] }),
+        })]),
+      ]));
     }
+    const addInput = el('input', { type: 'number', placeholder: '数量', value: '1' });
+    const addId = el('input', { type: 'number', placeholder: '物品 id' });
+    host.append(el('hr', { class: 'divider' }));
+    host.append(el('div', { class: 'row' }, [
+      el('b', { text: label }),
+      el('span', { class: 'hint', text: '新增/修改：' }),
+      addId, addInput,
+      el('button', {
+        class: 'btn sm', type: 'button', text: '新增/设置',
+        onclick: () => applyParty({ [kind]: [{ id: addId.value, count: addInput.value }] }),
+      }),
+    ]));
+    host.append(el('div', { class: 'table-wrap' }, [
+      el('table', {}, [
+        el('thead', {}, [el('tr', {}, [
+          el('th', { text: '名称' }), el('th', { text: '数量' }), el('th', { text: '操作' }),
+        ])]),
+        tbody,
+      ]),
+    ]));
+  }
+}
+
+async function applyParty(body) {
+  try {
+    const res = await postJSON('/api/cheats/party', body);
+    renderParty(res.party);
+    markDirty();
+    toast('已应用（记得保存存档）', 'ok', 2200);
   } catch (err) {
-    box.innerHTML = '';
-    box.append(el('div', { class: 'error-text', text: '识别失败：' + err.message }));
-    toast('识别失败：' + err.message, 'error');
+    toast('修改失败：' + err.message, 'error', 10000);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * 卡片 4：角色
+ * ------------------------------------------------------------------------- */
+function buildActorsCard() {
+  state.actorsHost = el('div', { id: 'ch-actors' });
+  return el('section', { class: 'card' }, [
+    el('h2', {}, [el('span', { class: 'step', text: '4' }),
+      document.createTextNode('角色')]),
+    el('div', {
+      class: 'card-sub',
+      text: '等级 / 经验 / HP / MP / TP 与 8 项属性加成。技能列表按 id 整体替换（与原工具一致）。',
+    }),
+    state.actorsHost,
+  ]);
+}
+
+function renderActors(actors) {
+  const host = state.actorsHost || document.getElementById('ch-actors');
+  if (!host) return;
+  host.textContent = '';
+  const list = (actors || []).filter(Boolean);
+  if (!list.length) {
+    host.append(el('div', { class: 'empty', text: '没有角色数据' }));
+    return;
+  }
+  const attrs = state.actorAttrs.length ? state.actorAttrs
+    : [{ key: 'level', label: '等级' }, { key: 'exp', label: '经验' },
+      { key: 'hp', label: 'HP' }, { key: 'mp', label: 'MP' }];
+
+  for (const actor of list) {
+    const inputs = {};
+    const grid = el('div', { class: 'grid' });
+    for (const attr of attrs) {
+      const value = actor[attr.key] !== undefined ? actor[attr.key] : '';
+      const input = el('input', { type: 'number', value: String(value) });
+      inputs[attr.key] = input;
+      grid.append(field(attr.label, input));
+    }
+    const skillsInput = el('input', {
+      type: 'text', placeholder: '技能 id，逗号分隔（留空则不改）',
+      value: (actor.skills || []).join(','),
+    });
+
+    const applyBtn = el('button', { class: 'btn primary', type: 'button', text: '应用' });
+    applyBtn.addEventListener('click', async () => {
+      const payload = {};
+      for (const [key, input] of Object.entries(inputs)) {
+        if (input.value !== '') payload[key] = input.value;
+      }
+      skillsInput.value.trim()
+        ? await applyActor(actor.index, payload,
+          skillsInput.value.split(',').map((s) => s.trim()).filter(Boolean))
+        : await applyActor(actor.index, payload, null);
+    });
+
+    host.append(el('div', { class: 'card-sub' }, [
+      el('b', { text: actor.name }),
+      el('span', { class: 'hint', text: `  (#${actor.actor_id} · 职业 ${actor.class_id || '—'})` }),
+    ]));
+    host.append(grid);
+    host.append(el('div', { class: 'row' }, [
+      el('span', { class: 'hint', text: '技能列表' }), skillsInput, applyBtn,
+    ]));
+    host.append(el('hr', { class: 'divider' }));
+  }
+}
+
+async function applyActor(actorId, attrs, skills) {
+  try {
+    const body = { actor_id: actorId, attrs };
+    if (skills) body.skills = skills;
+    const res = await postJSON('/api/cheats/actor', body);
+    renderActors(res.actors);
+    markDirty();
+    toast('已应用（记得保存存档）', 'ok', 2200);
+  } catch (err) {
+    toast('修改失败：' + err.message, 'error', 10000);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * 卡片 5：开关 / 变量
+ * ------------------------------------------------------------------------- */
+function buildVarsCard() {
+  state.varsHost = el('div', { id: 'ch-vars' });
+  const kindSel = el('select', { id: 'ch-var-kind' });
+  kindSel.append(el('option', { value: 'switches', text: '开关 (Switches)' }));
+  kindSel.append(el('option', { value: 'variables', text: '变量 (Variables)' }));
+  kindSel.addEventListener('change', () => loadVars(kindSel.value, 0));
+
+  const jumpInput = el('input', { type: 'number', placeholder: '跳到编号', min: '0' });
+  const jumpBtn = el('button', {
+    class: 'btn sm', type: 'button', text: '跳转',
+    onclick: () => loadVars(kindSel.value, Math.max(0, Number(jumpInput.value) - 20)),
+  });
+
+  return el('section', { class: 'card' }, [
+    el('h2', {}, [el('span', { class: 'step', text: '5' }),
+      document.createTextNode('开关 / 变量')]),
+    el('div', {
+      class: 'card-sub',
+      text: '编号从 1 开始（下标 0 是占位）。开关显示为「开 / 关」，变量直接填整数。',
+    }),
+    el('div', { class: 'row' }, [kindSel, jumpInput, jumpBtn]),
+    state.varsHost,
+  ]);
+}
+
+async function loadVars(key, offset) {
+  try {
+    const res = await getJSON(
+      `/api/cheats/vars?key=${encodeURIComponent(key)}&offset=${offset}&limit=${PAGE_SWITCHES}`);
+    state.vars = { key, offset, view: res.view };
+    renderVars();
+  } catch (err) {
+    const host = state.varsHost || document.getElementById('ch-vars');
+    if (host) {
+      host.textContent = '';
+      host.append(el('div', { class: 'hint', text: err.message }));
+    }
+  }
+}
+
+function renderVars() {
+  const host = state.varsHost || document.getElementById('ch-vars');
+  const view = state.vars.view;
+  if (!host || !view) return;
+  host.textContent = '';
+
+  const tbody = el('tbody', {});
+  for (const row of view.items) {
+    const number = row.index + 1;
+    let control;
+    if (view.key === 'switches') {
+      const box = el('input', { type: 'checkbox' });
+      box.checked = !!row.value;
+      box.addEventListener('change', () =>
+        setVar(view.key, row.index, box.checked));
+      control = el('label', { class: 'check' }, [box,
+        document.createTextNode(box.checked ? '开' : '关')]);
+    } else {
+      const input = el('input', { type: 'number', value: String(row.value) });
+      input.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') setVar(view.key, row.index, input.value);
+      });
+      control = el('div', { class: 'row' }, [input, el('button', {
+        class: 'btn sm', type: 'button', text: '应用',
+        onclick: () => setVar(view.key, row.index, input.value),
+      })]);
+    }
+    tbody.append(el('tr', {}, [
+      el('td', { class: 'num nowrap', text: String(number) }),
+      el('td', {}, [control]),
+    ]));
+  }
+
+  host.append(el('hr', { class: 'divider' }));
+  host.append(el('div', { class: 'row' }, [
+    el('span', {
+      class: 'hint',
+      text: `第 ${view.offset + 1} – ${view.offset + view.items.length} 项，共 ${view.total} 项`,
+    }),
+    el('span', { class: 'spacer' }),
+    el('button', {
+      class: 'btn sm', type: 'button', text: '上一页',
+      disabled: view.offset <= 0,
+      onclick: () => loadVars(view.key, Math.max(0, view.offset - PAGE_SWITCHES)),
+    }),
+    el('button', {
+      class: 'btn sm', type: 'button', text: '下一页',
+      disabled: view.offset + PAGE_SWITCHES >= view.total,
+      onclick: () => loadVars(view.key, view.offset + PAGE_SWITCHES),
+    }),
+  ]));
+  host.append(el('div', { class: 'table-wrap' }, [
+    el('table', {}, [
+      el('thead', {}, [el('tr', {}, [
+        el('th', { text: '编号' }), el('th', { text: '值' }),
+      ])]),
+      tbody,
+    ]),
+  ]));
+}
+
+async function setVar(key, index, value) {
+  try {
+    await postJSON('/api/cheats/var', { key, index, value });
+    markDirty();
+    await loadVars(key, state.vars.offset);
+    toast('已应用（记得保存存档）', 'ok', 2000);
+  } catch (err) {
+    toast('修改失败：' + err.message, 'error', 10000);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * 卡片 6：游戏数据表（不在存档里的那部分）
+ * ------------------------------------------------------------------------- */
+function buildDataTableCard() {
+  state.dataHost = el('div', { id: 'ch-data' });
+  return el('section', { class: 'card' }, [
+    el('h2', {}, [el('span', { class: 'step', text: '6' }),
+      document.createTextNode('游戏数据表')]),
+    el('div', {
+      class: 'card-sub',
+      text: '改的是 Data/ 下的数据文件（价格、攻击力、初始等级等），与存档无关，'
+        + '改完后所有存档都会生效。写回前会自动备份。',
+    }),
+    state.dataHost,
+  ]);
+}
+
+async function loadData(render = true) {
+  const host = state.dataHost || document.getElementById('ch-data');
+  if (!host) return;
+  if (render) host.textContent = '';
+  let res;
+  try {
+    res = await getJSON('/api/cheats/data'
+      + (state.data.filter ? `?file=${encodeURIComponent(state.data.filter)}` : ''));
+  } catch (err) {
+    host.textContent = '';
+    host.append(el('div', { class: 'hint', text: err.message }));
+    return;
+  }
+  state.data.fields = res.fields || [];
+  state.data.files = res.files || [];
+  if (render) renderData();
+}
+
+function renderData() {
+  const host = state.dataHost || document.getElementById('ch-data');
+  if (!host) return;
+  host.textContent = '';
+
+  const fileSel = el('select', {});
+  fileSel.append(el('option', { value: '', text: '全部数据文件' }));
+  for (const name of state.data.files) {
+    fileSel.append(el('option', { value: name, text: name }));
+  }
+  fileSel.value = state.data.filter;
+  fileSel.addEventListener('change', () => {
+    state.data.filter = fileSel.value;
+    loadData(true);
+  });
+
+  host.append(el('div', { class: 'row' }, [
+    fileSel,
+    el('span', { class: 'hint', text: `可编辑字段 ${state.data.fields.length} 项` }),
+    el('span', { class: 'spacer' }),
+    el('button', {
+      class: 'btn sm primary', type: 'button', text: '写回数据表',
+      disabled: !state.data.fields.length,
+      onclick: () => writeData(),
+    }),
+  ]));
+
+  if (!state.data.fields.length) {
+    host.append(el('div', { class: 'empty', text: '先在上面读取游戏数据。' }));
+    return;
+  }
+
+  const tbody = el('tbody', {});
+  for (const item of state.data.fields) {
+    let control;
+    if (item.kind === 'bool') {
+      const box = el('input', { type: 'checkbox' });
+      box.checked = !!item.value;
+      box.dataset.original = String(item.value);
+      box.addEventListener('change', markDirty);
+      control = box;
+    } else {
+      const input = el('input', {
+        type: item.kind === 'int' ? 'number' : 'text',
+        value: item.value === null || item.value === undefined ? '' : String(item.value),
+      });
+      input.dataset.original = String(item.value);
+      input.addEventListener('input', markDirty);
+      control = input;
+    }
+    control.dataset.file = item.file;
+    control.dataset.path = item.path;
+    control.dataset.kind = item.kind;
+
+    tbody.append(el('tr', {}, [
+      el('td', {}, [
+        el('div', { text: item.name || '—' }),
+        el('div', { class: 'hint mono', text: `${item.file} · ${item.path}` }),
+      ]),
+      el('td', { class: 'nowrap', text: item.label }),
+      el('td', {}, [control]),
+      el('td', { class: 'hint', text: kindLabel(item.kind) }),
+    ]));
+  }
+  host.append(el('div', { class: 'table-wrap' }, [
+    el('table', {}, [
+      el('thead', {}, [el('tr', {}, [
+        el('th', { text: '对象' }), el('th', { text: '字段' }),
+        el('th', { text: '值' }), el('th', { text: '类型' }),
+      ])]),
+      tbody,
+    ]),
+  ]));
+}
+
+function kindLabel(kind) {
+  return { int: '整数', bool: '开关', text: '文本' }[kind] || kind;
+}
+
+/** 收集改动过的字段（只发用户真的改了的，减少误覆盖面）。 */
+function collectDataEdits() {
+  const edits = [];
+  for (const node of document.querySelectorAll('#ch-data [data-path]')) {
+    const original = node.dataset.original;
+    let value;
+    if (node.type === 'checkbox') {
+      value = node.checked;
+      if (String(original) === String(value)) continue;
+    } else {
+      value = node.value;
+      if (value === original) continue;
+    }
+    edits.push({
+      file: node.dataset.file,
+      path: node.dataset.path,
+      kind: node.dataset.kind,
+      value,
+      original: node.type === 'checkbox' ? (original === 'true') : original,
+    });
+  }
+  return edits;
+}
+
+async function writeData() {
+  const edits = collectDataEdits();
+  if (!edits.length) {
+    toast('没有检测到改动', 'warn');
+    return;
+  }
+  const game = (state.game && state.game.game_dir) || '（当前游戏）';
+  const files = [...new Set(edits.map((e) => e.file))].join('、');
+  const ok = await confirmDialog('确认写回游戏数据表？',
+    `将修改 <span class="code">${escapeHTML(game)}</span> 下的 <b>${escapeHTML(files)}</b>`
+    + `（共 ${edits.length} 个字段）。<br><br>`
+    + '这些改动会作用于<b>所有存档</b>。写回前会自动备份到游戏目录下的「汉化备份_*」。',
+    '确认写回');
+  if (!ok) return;
+  try {
+    const res = await postJSON('/api/cheats/data', { edits, confirm: true });
+    state.data.fields = res.fields || [];
+    renderData();
+    await loadBackups();
+    toast(`写回完成：${res.stats.entries} 个字段`
+      + (res.backup_dir ? '（已备份）' : ''), 'ok', 8000);
+  } catch (err) {
+    toast('写回失败：' + err.message, 'error', 15000);
+  }
+}
+
+
+/* ---------------------------------------------------------------------------
+ * 卡片 7：保存 / 备份 / 还原
+ * ------------------------------------------------------------------------- */
+function renderStatus() {
+  const host = state.statusHost;
+  if (!host) return;
+  host.textContent = '';
+  host.append(el('h2', {}, [el('span', { class: 'step', text: '✓' }),
+    document.createTextNode('保存与备份')]));
+
+  const saveBtn = el('button', { class: 'btn danger', type: 'button', text: '保存存档' });
+  saveBtn.addEventListener('click', () => saveCurrent(saveBtn));
+
+  const reloadBtn = el('button', { class: 'btn', type: 'button', text: '放弃改动并重新载入' });
+  reloadBtn.addEventListener('click', async () => {
+    if (!state.current) return;
+    const ok = await confirmDialog('放弃改动？',
+      '内存里未保存的修改会全部丢失，并重新从磁盘读取存档。', '放弃并重载');
+    if (ok) loadSave(state.current);
+  });
+
+  host.append(el('div', { class: 'row' }, [
+    el('span', {
+      class: 'chip ' + (state.dirty ? 'warn' : ''),
+      text: state.dirty ? '有未保存的改动' : '没有未保存的改动',
+    }),
+    el('span', { class: 'hint', text: state.current || '尚未载入存档' }),
+    el('span', { class: 'spacer' }),
+    reloadBtn, saveBtn,
+  ]));
+  if (!state.dirty) saveBtn.disabled = false;
+  host.append(el('div', { class: 'hint', id: 'ch-policy',
+    text: '写回原存档前会自动备份到游戏目录下的「汉化备份_*」，随时可以还原。' }));
+  host.append(el('div', { id: 'ch-backups' }));
+}
+
+function markDirty() {
+  state.dirty = true;
+  renderStatus();
+}
+
+async function saveCurrent(button) {
+  if (!state.current) { toast('请先载入一个存档', 'warn'); return; }
+  const ok = await confirmDialog('确认写回原存档？',
+    `将修改 <span class="code">${escapeHTML(state.current)}</span>。<br><br>`
+    + '写回前会自动把将被修改的文件备份到游戏目录下的「汉化备份_*」，'
+    + '保存后界面会显示备份位置。',
+    '确认写回');
+  if (!ok) return;
+  button.disabled = true;
+  try {
+    const res = await postJSON('/api/cheats/save', { confirm: true });
+    state.dirty = false;
+    renderStatus();
+    await loadBackups();
+    showBackupPath(res);
+    toast('存档已写回', 'ok', 6000);
+  } catch (err) {
+    toast('保存失败：' + err.message, 'error', 15000);
   } finally {
     button.disabled = false;
   }
 }
 
-function kv(label, value) {
-  return el('div', { class: 'field' }, [
-    el('label', { text: label }),
-    el('div', {}, [el('span', { class: 'code', text: value || '—' })]),
+/** 硬约束 §4.2：写回后必须展示备份路径。 */
+function showBackupPath(res) {
+  const host = document.getElementById('ch-backups');
+  if (!host || !res || !res.backup_dir) return;
+  const row = el('div', { class: 'row' }, [
+    el('span', { class: 'hint', text: '本次备份位置' }),
+    el('span', { class: 'code', text: res.backup_dir }),
+    el('button', {
+      class: 'btn sm', type: 'button', text: '打开备份目录',
+      onclick: () => openInExplorer(res.backup_dir),
+    }),
   ]);
+  host.prepend(row);
 }
 
-export { runDetect };
+async function loadBackups() {
+  const host = document.getElementById('ch-backups');
+  if (!host) return;
+  let res;
+  try {
+    res = await getJSON('/api/cheats/backups');
+  } catch (err) {
+    return;
+  }
+  /* 保留"本次备份位置"那一行（它是 prepend 进去的） */
+  const keep = host.querySelector('.row');
+  const anchor = keep && keep.textContent.includes('本次备份位置') ? keep : null;
+  host.textContent = '';
+  if (anchor) host.append(anchor);
+
+  const list = res.backups || [];
+  if (!list.length) return;
+  const tbody = el('tbody', {});
+  for (const item of list) {
+    tbody.append(el('tr', {}, [
+      el('td', {}, [el('span', { class: 'code', text: item.name })]),
+      el('td', { class: 'num', text: String(item.files) }),
+      el('td', { class: 'nowrap', text: item.time }),
+      el('td', {}, [item.has_manifest
+        ? el('span', { class: 'tag ok', text: '可还原' })
+        : el('span', { class: 'tag warn', text: '旧版备份' })]),
+      el('td', {}, [el('button', {
+        class: 'btn sm danger', type: 'button', text: '还原',
+        onclick: () => restoreBackup(item),
+      })]),
+    ]));
+  }
+  host.append(el('hr', { class: 'divider' }));
+  host.append(el('div', { class: 'hint', text: `备份列表（${list.length} 个，新的在前）` }));
+  host.append(el('div', { class: 'table-wrap' }, [
+    el('table', {}, [
+      el('thead', {}, [el('tr', {}, [
+        el('th', { text: '备份' }), el('th', { text: '文件数' }),
+        el('th', { text: '时间' }), el('th', { text: '状态' }), el('th', { text: '操作' }),
+      ])]),
+      tbody,
+    ]),
+  ]));
+}
+
+async function restoreBackup(item) {
+  const game = (state.game && state.game.game_dir) || '（当前游戏）';
+  const ok = await confirmDialog('确认还原？',
+    `将用备份 <span class="code">${escapeHTML(item.name)}</span> 覆盖 `
+    + `<span class="code">${escapeHTML(game)}</span> 下的文件。<br><br>`
+    + '当前状态会先被自动再备份一次 —— 所以「还原错了」还可以再还原回来。',
+    '确认还原');
+  if (!ok) return;
+  try {
+    const res = await postJSON('/api/cheats/restore', { dir: item.dir, confirm: true });
+    toast(`还原完成：恢复 ${res.result.restored || 0} 个文件`, 'ok', 7000);
+    if (state.current) await loadSave(state.current);
+    await loadData(true);
+  } catch (err) {
+    toast('还原失败：' + err.message, 'error', 15000);
+  }
+}
+
+async function openInExplorer(dir) {
+  if (!dir) return;
+  try {
+    await postJSON('/api/cheats/open_dir', { dir });
+  } catch (err) {
+    toast('无法打开目录：' + err.message, 'warn');
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * 初始化 / 小工具
+ * ------------------------------------------------------------------------- */
+async function loadStatus() {
+  try {
+    const res = await getJSON('/api/cheats/status');
+    state.actorAttrs = res.actor_attrs || [];
+    state.itemKinds = res.item_kinds || [];
+    if (res.game && res.game.opened) {
+      state.game = res.game;
+      applyEngineChips({ ok: true, game: res.game });
+      await loadSaves();
+      await loadData(true);
+      /* 重新拉一次角色列表：切换页面回来时，下拉里要能直接改，
+         否则用户得先"载入存档"才能看到角色（其实数据一直都在） */
+      if (res.save_path) {
+        const actors = await getJSON('/api/cheats/actors').catch(() => null);
+        if (actors && actors.actors) renderActors(actors.actors);
+      }
+    }
+  } catch (err) {
+    /* 首屏失败不打扰用户；每个操作都会各自报错 */
+  }
+}
+
+function fmtSize(bytes) {
+  const n = Number(bytes || 0);
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}

@@ -50,17 +50,21 @@
       "id": "cheats",
       "name": "存档修改",
       "icon": "改",
-      "version": "0.1.0",
-      "description": "读取存档并修改金币、步数、道具/武器/防具数量、角色属性与技能、开关与变量；保存前自动备份。",
+      "version": "0.3.0",
+      "description": "读取存档并修改金币、步数、道具/武器/防具数量、角色属性与技能、开关与变量；也能改游戏数据表（价格/攻击力/初始等级）；保存前自动备份。",
       "order": 20,
       "core_deps": [
         "core.engines",
         "core.constants",
         "core.formats.mv_save",
         "core.formats.rgss_save",
+        "core.formats.mv_mz_data",
+        "core.formats.rgss_data",
         "core.formats.lzstring",
         "core.marshal.doc_model",
-        "core.safety.atomic"
+        "core.marshal.value_layer",
+        "core.safety.atomic",
+        "core.safety.backup"
       ],
       "api_prefix": "/api/cheats",
       "pages": [
@@ -294,7 +298,7 @@
       "footprint": "docs/MODULES.md#coreformats",
       "vendored": true,
       "note": "vendored：来自 rpgmaker_translation_tool/tool/mv_mz.py。 M2b 已把 JSON / 压缩 / 加密包装的**共同约定**收敛到 core/formats/jsoncodec.py，本文件只保留\"提取哪些字段、 改哪个键\"这类业务规则。 B-02 修复：写回走 core.safety.atomic（jsoncodec 转发的原子写）。",
-      "lines": 398
+      "lines": 450
     },
     "core/formats/mv_save.py": {
       "feature": "cheats",
@@ -305,13 +309,14 @@
         "META_KEYS"
       ],
       "depends": [
-        "core.formats.jsoncodec"
+        "core.formats.jsoncodec",
+        "core.safety.atomic"
       ],
-      "tested": "tests/compat/test_formats_compat.py",
+      "tested": "tests/compat/test_formats_compat.py, tests/compat/test_m2a_regressions.py,",
       "footprint": "docs/MODULES.md#coreformats",
       "vendored": true,
-      "note": "vendored：来自 rpgmaker_cheating_tool/mvdata.py。 M2b 已把 JSON / 压缩 / JsonEx 元数据约定收敛到 core/formats/jsoncodec.py（与 mv_mz_data 共用一份实现）， 本文件只保留\"改哪个键、怎么改\"的业务规则。",
-      "lines": 283
+      "note": "vendored：来自 rpgmaker_cheating_tool/mvdata.py。 M2b 已把 JSON / 压缩 / JsonEx 元数据约定收敛到 core/formats/jsoncodec.py（与 mv_mz_data 共用一份实现）， 本文件只保留\"改哪个键、怎么改\"的业务规则。 **M3b 修复 B-02 残留**：save() 原先直接 ``open(path, 'wb')``， 写一半中断就把用户存档毁了 —— 现在走 core.safety.atomic。",
+      "lines": 293
     },
     "core/formats/rgss_data.py": {
       "feature": "translate",
@@ -329,7 +334,7 @@
       "footprint": "docs/MODULES.md#coreformats",
       "vendored": true,
       "note": "vendored：来自 rpgmaker_translation_tool/tool/vxace.py。 已知缺陷 B-02（非原子写）、B-13（original 参数未用于校验）。",
-      "lines": 571
+      "lines": 715
     },
     "core/formats/rgss_save.py": {
       "feature": "cheats",
@@ -341,13 +346,14 @@
         "find_top_hash"
       ],
       "depends": [
-        "core.marshal.doc_model"
+        "core.marshal.doc_model",
+        "core.safety.atomic"
       ],
-      "tested": "tests/compat/test_formats_compat.py",
+      "tested": "tests/compat/test_formats_compat.py, tests/compat/test_m2a_regressions.py,",
       "footprint": "docs/MODULES.md#coreformats",
       "vendored": true,
-      "note": "vendored：来自 rpgmaker_cheating_tool/rpgdata.py。",
-      "lines": 517
+      "note": "vendored：来自 rpgmaker_cheating_tool/rpgdata.py。 **M3b 修复两处**： 1) B-02 残留：save() 原先直接 ``open(path, 'wb')`` → 改原子写； 2) 句柄泄漏：``open(path,'rb').read()`` 依赖 GC 关闭文件 （Windows 上会让后续替换/删除失败）→ 改 ``with`` 语句。",
+      "lines": 535
     },
     "core/jobs.py": {
       "feature": "none",
@@ -613,6 +619,24 @@
       "vendored": false,
       "lines": 17
     },
+    "features/cheats/data_fields.py": {
+      "feature": "cheats",
+      "layer": "features",
+      "public": [
+        "MV_FIELD_RULES",
+        "RGSS_FIELD_RULES",
+        "rules_for_file",
+        "build_entries"
+      ],
+      "depends": [
+        "core.formats.mv_mz_data",
+        "core.formats.rgss_data"
+      ],
+      "tested": "tests/features/cheats/test_routes.py",
+      "footprint": "docs/FEATURES.md#cheats",
+      "vendored": false,
+      "lines": 493
+    },
     "features/cheats/manifest.py": {
       "feature": "cheats",
       "layer": "features",
@@ -630,7 +654,26 @@
       "tested": "tests/features/cheats/",
       "footprint": "docs/FEATURES.md#cheats",
       "vendored": false,
-      "lines": 115
+      "lines": 111
+    },
+    "features/cheats/routes.py": {
+      "feature": "cheats",
+      "layer": "features",
+      "public": [
+        "CheatsService",
+        "register_routes",
+        "BackupPolicy",
+        "ACTOR_ATTRS"
+      ],
+      "depends": [
+        "features.cheats.data_fields",
+        "core.engines",
+        "core.formats.mv_save"
+      ],
+      "tested": "tests/features/cheats/test_routes.py",
+      "footprint": "docs/FEATURES.md#cheats",
+      "vendored": false,
+      "lines": 695
     },
     "features/translate/__init__.py": {
       "feature": "translate",
