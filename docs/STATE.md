@@ -1,19 +1,19 @@
 # 当前状态快照（STATE）
 
 > **接手本工程第一份要读的文件。** 读完本文件你就能说清"系统有哪几个功能、各自改哪里"。
-> 每个里程碑结束时更新。最后更新：**M1 完成**。
+> 每个里程碑结束时更新。最后更新：**M3a 后端接线完成时**。
 
 ---
 
 ## 1. 一句话状态
 
-**M2b core 收敛已完成**：需求 §3.3 的三类重复实现**各只剩一份** ——
-引擎识别、MV/MZ 编解码（`jsoncodec.py`）、Ruby Marshal（`doc_model` 二进制层 +
-`value_layer` 门面，旧 `value_model` 已删）。`_refbridge.py` 已删除，
-`/api/health` 的 `convergence.all_merged == true`。
-**M3a 已开工**：扫描链路在 4 个真实游戏上跑通，并修掉三个"静默丢功能"缺陷
-（N-12/13/14，VX Ace 提取量 115 → 16,547 条）。
-**下一步：M3a 剩余（翻译 / 生成汉化版 / 还原 / UI 接线）。**
+**M3a 的后端已全部接线完成**：`features/translate/routes.py` 用 17 个端点把
+**扫描 → 编辑 → 批量翻译 → 生成汉化版 → 备份还原**整条链路接起来，
+长任务全部走 `ctx.jobs`（可取消、有进度），所有写回走安全层，
+覆盖必须显式确认。接线过程又暴露并修掉两个真缺陷：**N-15**
+（MV/MZ 事件对话静默写不进汉化版）与一处**分层违规**
+（`features` 反向 import `ui` → 对话框能力下沉到 `core/sysdialog.py`）。
+**下一步：M3a 前端（`ui/web/pages/translate.js` 接这 17 个端点）→ M4 统一界面 → M3b 修改功能接入。**
 
 ---
 
@@ -24,8 +24,8 @@
 | M0 现状测绘 | ✅ 完成 | 每条功能都有"原位置 → 新位置"映射 | `docs/M0-现状测绘.md`、`docs/迁移对照表.md`（99 条映射） |
 | M1 骨架与足迹 | ✅ 完成 | 空壳可启动，足迹校验通过 | `python app.py --check` 退出码 0；足迹校验 0 错误 |
 | M2a 可信基线 + P0 修复 | ✅ 完成 | 测试可一键跑且退出码可信；P0 缺陷有回归断言 | 5 个 P0 + 4 个 P1 已修；合成 VX/XP 样本覆盖 B-10 活路径 |
-| **M2b core 收敛** | ✅ **完成** | 三类职责各只有一份实现 | `all_merged == true`；`value_model.py` 与 `_refbridge.py` 已删除；475 例测试全绿 |
-| **M3a 翻译功能接入** | 🔄 **进行中** | 扫描→翻译→生成汉化版→还原 全链路走通 | ✅ **扫描链路已在 4 个真实游戏上跑通**（含 VX Ace 的三个"静默丢功能"修复）；⬜ 翻译 / 生成汉化版 / 还原 与 UI 接线 |
+| **M2b core 收敛** | ✅ **完成** | 三类职责各只有一份实现 | `all_merged == true`；`value_model.py` 与 `_refbridge.py` 已删除 |
+| **M3a 翻译功能接入** | 🔄 **后端完成，前端待做** | 扫描→翻译→生成汉化版→还原 全链路走通 | ✅ 扫描（4 个真实游戏）；✅ 后端全链路（MV 与 VX Ace 合成样本端到端：扫描→标记译文→构建→写回→还原）；⬜ 前端未接这 17 个端点 |
 | M3b 修改功能接入 | ⬜ 未开始 | 5 类存档读写改回读在界面走通 | — |
 | M4 UI 统一 | ⬜ 未开始 | UI 审查通过，无孤立样式 | — |
 | M5 验收硬化 | ⬜ 未开始 | 需求 §8 的 8 项全过 | — |
@@ -103,7 +103,7 @@ RPG Maker 全能工具 v2.0.0-dev  (Python 3.10.9)
 | `docs/DEVLOG.md` | ✅ |
 | `docs/UI_SPEC.md` | ✅ |
 | `docs/ROADMAP.md` | ✅ |
-| `docs/footprint.json` | ✅ 40 文件 / 2 功能（由 `tools/gen_footprint.py` 从源码生成） |
+| `docs/footprint.json` | ✅ 39 文件 / 2 功能（由 `tools/gen_footprint.py` 从源码生成） |
 | `docs/OPEN-QUESTIONS.md` | ✅ |
 | `docs/M0-现状测绘.md`、`docs/迁移对照表.md` | ✅ |
 | `tools/check_footprint.py` | ✅ 12 条规则，**会真的失败**（每条规则都有触发用例） |
@@ -173,14 +173,24 @@ M2b 的 marshal 收敛完成后，把 `rgss_data.py` 切到 `value_layer`。**VX
 | **N-12** | `core/formats/rgss_data.py` | `RPG::Map#@events` 是 **Hash**（键为事件 id），而 vendored 代码用 `enumerate` 当列表遍历 → `RMDict.__getitem__(0)` 抛 **`KeyError: 0`**，整张地图的地图事件全丢 | 新增 `_pairs_of()` / `_pairs_of_values()`，把 Array / Hash / 值层代理 / Ivar 包装统一成 `[(key, value)]`；所有遍历点改用它 |
 | **N-13** | 同上 | 字符串在值层是 **`RMStr` 代理**，`isinstance(v, str)` 不成立 → `_text_of` 返回 `None` → 文本被判为"没有内容"；`@parameters` 还是 **Ivar 包装的数组**，`len()` 为 0 → 所有 401/402 对话被丢弃 | `_text_of` 分三层剥（`Ivar` → 带 `.value` 的代理 → 原生类型）；`@parameters` 取值后先 `_unwrap` |
 | **N-14** | `core/marshal/doc_model.py` | **`SymLink`（符号表引用）没被解析** → `class_name` 退化成 `"symbol#6"` → 所有 `class_name == "RPG::EventCommand"` 判断失效、`_rmobject_key` 找不到 `@code`/`@parameters` | `_sym_name` 回查 `node._parser.symbols`；新增有界的模块级解析器登记表 `_PARSERS`（深层 SymLink 拿不到 `_parser`）；`loads` 改走 `load_streams`（只有它回填 `_parser`） |
+| **N-15** | `core/formats/mv_mz_data.py` | MV/MZ 事件条目的路径**多拼了一层 `/list/`**（`1/list/list/1/parameters/0`）→ 扫描、统计、界面**全都正常**，但 `apply_to_files` 按路径写回时定位失败 → **事件对话与选择项全部写不进汉化版，且不报错**（表现："生成成功、数据库名词翻译了、剧情还是原文"）。同一函数里还有第二处：`_set_by_path` 只归一化中间段，末段仍是字符串 → `list[str]` 抛 `TypeError` 被上层吞掉 | ① 删除多余的一层 `list`（`path_prefix` 已含 `list`）；② `_set_by_path` 按父容器类型归一化末段键（`list` → `int`）。回归：`tests/features/translate/test_scan_regressions.py::TestN15MVEventPathShape`（4 例，含"路径必须定位到原文"与端到端写回），以及 `test_routes.py` 的 MV 构建用例 |
 
-**为什么这一条最值得记**：三处都**不报错**，只表现为"译文变少了"。
-如果 M3a 只做接线不做量级核对，这个问题会一直潜伏到用户发现。
+**为什么这一条最值得记**：四处（N-12 ～ N-15）**都不报错**，只表现为"译文变少了"
+或"生成成功但游戏里没变"。如果 M3a 只做接线不做**构建后的写回核对**，
+N-15 会一路潜伏到用户投诉。**教训：接线阶段必须验证"写进去了"，
+而不只是"扫描出来了"和"任务成功了"。**
 
 **已加防护**：`tests/features/translate/test_scan_regressions.py`
 * N-12/13/14 各自的单元断言（含"两遍构造"的符号表夹具）
+* N-15 的路径形状断言 + **端到端写回**断言
 * **真实样本量级断言**（`TestRealGameScanVolume`）：四个真实游戏的提取量下界，
   以及"VX Ace 必须包含对话而不只是界面术语" —— 提取量骤降会被测试抓到
+
+**端到端写回防护**（M3a 新增）：`tests/features/translate/test_routes.py::TestBuildAndRestore`
+在 MV 与 VX Ace 上**各跑一遍**完整链路，并断言：
+构建后数据文件里**真的是译文**（而不是只看"任务成功"）、
+`copy` 模式**原游戏目录字节不变**、覆盖必须 `confirm=true`、
+`inplace` **一定生成备份**、还原后**原文真的回来了**。
 
 ### 真实样本扫描基线（M3a 实测，供后续对照）
 
@@ -199,19 +209,28 @@ M2b 的 marshal 收敛完成后，把 `rgss_data.py` 切到 `value_layer`。**VX
 ## 6. 当前测试状态
 
 ```powershell
-python tests/run_all.py                      # 492 例，0 失败 0 错误（含真实样本）
+python tests/run_all.py                      # 585 例，0 失败 0 错误
 python tests/run_all.py --quiet              # 退出码 0
-python tools/check_footprint.py --quiet      # 退出码 0（37 文件 / 2 功能）
+python tools/check_footprint.py --quiet      # 退出码 0（39 文件 / 2 功能）
 python app.py --check                        # 退出码 0
 ```
 
 | 测试层 | 用例数 | 说明 |
 | --- | --- | --- |
-| `unit/` | ~300 | 纯单元，零外部依赖 |
+| `unit/` | ~320 | 纯单元，零外部依赖（含 `test_sysdialog.py` 的 23 例） |
 | `compat/` | ~96 | 原两个工具断言的可迁移版本 + **M2a 缺陷回归** + **合成 VX/XP 样本** |
-| `features/` | ~30 | 两个功能模块的自有测试 |
+| `features/` | ~120 | 两个功能模块的自有测试（translate 占 ~116：`test_routes.py` 88 + `test_scan_regressions.py` 22 + `test_manifest.py`） |
 | `integration/` | ~30 | 启动服务后的端到端链路 + 零第三方依赖扫描 + Python 3.8 语法扫描 |
 | `local/` | 0（待补） | 真实样本层，靠 `TUDOU_RPGTOOL_SAMPLES` 指定；样本不入库 |
+
+**M3a 新增的测试重点**（都是"以前没有任何测试碰过"的地方）：
+
+* `tests/features/translate/test_routes.py`（88 例）：17 个端点**双向**契约核对、
+  后台任务可取消、掩码回显**不覆盖已存 API Key**、隐私断言（出网请求只含文本）、
+  构建→写回→还原端到端（MV 与 VX Ace 各一遍）
+* `tests/unit/test_sysdialog.py`（23 例）：B-27 的修复本身可被 CI 断言
+  （候选路径查找 / 脚本拼装 / 降级契约；真正弹窗的部分不测）
+* `tests/features/translate/test_scan_regressions.py::TestN15MVEventPathShape`（4 例）
 
 **真实样本覆盖**（设 `TUDOU_RPGTOOL_SAMPLES` 后）：
 
@@ -228,52 +247,73 @@ python app.py --check                        # 退出码 0
 
 ---
 
-## 7. 下一步（M3a 翻译功能接入）任务清单
+## 7. 下一步（M3a 剩余 → M3b）
 
-M2b 已把 core 收敛完毕，M3a 不再有先收敛再接线的顾虑。按需求 §10 的 M3a 判据：
-**扫描 → 翻译 → 生成汉化版 → 还原 全链路在界面走通**。
+按需求 §10 的 M3a 判据：**扫描 → 翻译 → 生成汉化版 → 还原 全链路在界面走通**。
 
-### 7.1 功能接线（后端）
+### 7.1 后端接线（M3a 已完成 ✅）
+
+落点：`features/translate/routes.py`（新建，17 个端点）+ `features/translate/manifest.py`（改为薄壳）。
+
+| # | 任务 | 状态 | 证据 |
+| --- | --- | --- | --- |
+| 1 | 扫描：4 个开关（注释/备注/事件名/动画名）→ 后台任务 + 进度 | ✅ | `TestOpenAndScan`（MV 与 VX Ace 各跑一遍） |
+| 2 | 文本列表：搜索 / 类别 / 状态 / 分页 / 行内编辑 / 批量跳过 | ✅ | `TestEntryPaging`（含"分页不重不漏"断言） |
+| 3 | 4 个引擎适配器接线 + 设置持久化 + 接口自检 | ✅ | `TestConfigEndpoints` + `test_providers_ids_match_build_translator` |
+| 4 | 批量翻译：进度 + 可中断 + 断点续传 | ✅ | 走 `ctx.jobs` + `_CancelBridge`；`TestJobEndpoints` |
+| 5 | 生成汉化版：复制到新目录 / 覆盖原游戏（二次确认 + 备份路径） | ✅ | `TestBuildAndRestore`（MV 与 VX Ace 各跑一遍） |
+| 6 | 备份列表 + 还原入口 | ✅ | 同上：`list_backups` / `restore_backup` 端到端 |
+| 7 | 字体应用（`font` 参数透传给 `builder.build`） | ✅ 后端 | `apply_font` 已有 M2a 回归；UI 待 M4 |
+| 8 | 隐私断言：请求体不含 file/path/游戏目录 | ✅ | `TestPrivacy::test_translate_batch_receives_only_texts` |
+
+**M3a 接线期暴露的两个额外缺陷**（都不是"接线写错了"，而是被接线暴露出来的真缺陷）：
+
+* **N-15**：MV/MZ 事件条目路径多拼一层 `/list/` → 事件对话与选择项
+  **写不进汉化版且不报错**（详见 §5 的 M3a 小节）
+* **F-09 违规**：`features/translate/routes.py` 曾反向 import `ui.native_pick`
+  → 对话框能力下沉到 `core/sysdialog.py`（分层是硬约束，见 `docs/MODULES.md`）
+
+### 7.2 M3a 剩余（前端）与 M3b
 
 | # | 任务 | 落点 |
 | --- | --- | --- |
-| 1 | 扫描：4 个开关（注释/备注/事件名/动画名）→ 后台任务 + 进度 | eatures/translate/routes.py（新建）+ eatures/translate/session.py |
-| 2 | 文本列表：搜索 / 类别筛选 / 状态筛选 / 分页 / 行内编辑 / 跳过 | 同上 + ui/web/pages/translate.js |
-| 3 | 4 个引擎适配器接线 + 设置持久化 + 接口自检 | eatures/translate/translators.py + core/config.py |
-| 4 | 批量翻译：进度 + ETA + 可中断 + 重试出错内容 + 断点续传 | eatures/translate/（任务内用 job.set_progress / job.token） |
-| 5 | 生成汉化版：复制到新目录 / 覆盖原游戏（**必须二次确认 + 展示备份路径**） | core/safety/builder.py 的 uild(..., confirm_overwrite=True) |
-| 6 | 备份列表 + 还原入口（UI 可点） | core/safety/backup.py 的 list_backups / 
-estore_backup |
-| 7 | 字体应用两条路径 + 失败回退提示 | core/safety/builder.py 的 pply_font |
-| 8 | 隐私断言：请求体不含 file/path/游戏目录 | 新增测试 |
+| 1 | 把 `ui/web/pages/translate.js` 接到这 17 个端点（选目录 → 扫描 → 列表 → 翻译 → 生成汉化版 → 还原） | `ui/web/pages/translate.js` + `docs/UI_SPEC.md`（M4 统一） |
+| 2 | 设置表单（引擎 / Key / 模型 / 语言 / 并发 / 批大小）+ 接口自检按钮 | 同上 |
+| 3 | 破坏性操作二次确认 + **展示备份路径**（硬约束 §4.2） | `ui/web/dom.js` 的 `confirmDialog()` |
+| 4 | M3b：`cheats` 的 5 类存档读写改回读（`/api/cheats/*`） | `features/cheats/` |
 
-### 7.2 必须遵守的既有约束（M2a/M2b 建立）
+### 7.3 必须遵守的既有约束（M2a/M2b 建立）
 
-* **写回一律走 core/safety/atomic.py** —— 由 	est_m2a_regressions.py 的
-  AST 扫描强制（禁止写模式 open）
-* **覆盖必须 confirm_overwrite=True** —— 否则抛 OverwriteNotConfirmed
-* **破坏性操作二次确认** —— ui/web/dom.js 的 confirmDialog()
-* **默认只写副本** —— mode=copy 是默认，不传则界面默认选中它
-* **长任务必须可中断** —— 用 ctx.jobs.submit(fn)，任务内查
-  job.token.is_cancelled()；不给界面留点了停不下来的按钮
-* **进度回调签名** progress_cb(done, total, message=None)
+* **写回一律走 `core/safety/atomic.py`** —— 由 `tests/compat/test_m2a_regressions.py`
+  的 AST 扫描强制（禁止写模式 `open`）
+* **覆盖必须 `confirm_overwrite=True`** —— 否则抛 `OverwriteNotConfirmed`
+* **破坏性操作二次确认** —— `ui/web/dom.js` 的 `confirmDialog()`
+* **默认只写副本** —— `mode=copy` 是默认，界面默认选中它
+* **长任务必须可中断** —— 用 `ctx.jobs.submit(fn)`，任务内查
+  `job.token.is_cancelled()`；不给界面留点了停不下来的按钮
+* **进度回调签名** `progress_cb(done, total, message=None)`
+* **功能不得 import `ui`** —— 需要界面能力时把实现放进 `core`（M3a 的 F-09 教训）
 
-### 7.3 端到端回归（§8-2 的判据）
+### 7.4 端到端回归（需求 §8-2 的判据）
 
 MV / MZ / VX Ace / XP **各至少 1 个样本**走完：
 
-`
+```text
 扫描 → 翻译（用离线假翻译器跑通，不依赖真引擎）→ 生成汉化版 → 写回原游戏 → 还原
-`
+```
 
-用 TUDOU_RPGTOOL_SAMPLES 指向真实样本；**样本不入库**（ADR-005）。
+用 `TUDOU_RPGTOOL_SAMPLES` 指向真实样本；**样本不入库**（ADR-005）。
+M3a 已覆盖 MV 与 VX Ace（合成样本，进 CI）；**MZ / XP 与真实样本待 M5 补齐**。
 
-## 8. 当前已知的临时状态（M3 会消掉，别当成设计）
+## 8. 当前已知的临时状态（M3/M4 会消掉，别当成设计）
 
 | 临时状态 | 消除时机 | 验收判据 |
 | --- | --- | --- |
-| `features/translate/translators.py`、`session.py` 是 vendored 代码，尚未按 `manifest.py` 契约组织 | M3a | 接线为正式模块并接入 UI |
-| 两个功能页都是**骨架**（`status: skeleton`） | M3a / M3b | 两条回归链路在界面走通 |
+| `features/translate/translators.py`、`session.py` 是 vendored 代码（保留了原实现的结构与注释） | M5 视情况整理 | 行为由 `test_routes.py` / `test_scan_regressions.py` 覆盖；整理时必须保持 4 个适配器与去重翻译语义不变 |
+| ~~两个功能页都是**骨架**~~ → `translate` **后端已完成但页面未接** | M4 | 页面接上 17 个端点，全链路在界面走通（§7.2） |
+| `features/cheats/manifest.py` 仍是骨架（只有 `/status` 与 `/detect`） | M3b | 5 类存档读写改回读在界面走通 |
+| `ctx.translate_service` 是为测试/调试页暴露的服务实例 | 保留（已文档化） | 生产代码不得依赖它；`register_routes` 的 docstring 已声明 |
+| MZ / XP 的端到端构建只在合成样本上覆盖 | M5 | 用 `TUDOU_RPGTOOL_SAMPLES` 的真实样本各跑一遍 |
 
 **M2b 已完成的部分（全部）**：
 

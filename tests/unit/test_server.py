@@ -290,8 +290,34 @@ class TestCoreRoutes(unittest.TestCase):
         status, payload = http(self.url + "api/routes")
         patterns = {r["pattern"] for r in payload["routes"]}
         self.assertIn("/api/health", patterns)
-        self.assertIn("/api/translate/status", patterns)
+        # M3a：翻译功能已接线，这里改断言一个真实的业务端点
+        # （骨架端点 /api/translate/status 已由 /api/translate/state 取代）
+        self.assertIn("/api/translate/state", patterns)
         self.assertIn("/api/cheats/detect", patterns)
+
+    def test_translate_state_over_http(self):
+        """端到端过一次 HTTP：路由 → 处理器 → JSON 序列化。
+
+        单元测试直接调 handler 拿不到"响应能不能被序列化成 JSON"这一层，
+        而 M3a 返回的都是复杂嵌套 dict（含 None / 浮点 / 中文），值得钉一下。
+        """
+        status, payload = http(self.url + "api/translate/state")
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["session"]["loaded"])
+        self.assertIsNone(payload["session"]["game_dir"])
+
+    def test_translate_open_missing_dir_over_http(self):
+        status, payload = http(self.url + "api/translate/open", "POST", {})
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["ok"])
+        self.assertIn("dir", payload["error"])
+
+    def test_translate_providers_over_http(self):
+        status, payload = http(self.url + "api/translate/providers")
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(len(payload["providers"]), 4)
 
     def test_job_missing_code(self):
         status, payload = http(self.url + "api/job?id=nope")

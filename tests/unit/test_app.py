@@ -63,11 +63,27 @@ class TestAppAssembly(unittest.TestCase):
                 self.assertIn(required, patterns)
 
     def test_feature_routes_are_registered(self):
-        patterns = {r["pattern"] for r in self.app.context.router.describe()}
-        self.assertIn("/api/translate/status", patterns)
-        self.assertIn("/api/translate/providers", patterns)
-        self.assertIn("/api/cheats/status", patterns)
-        self.assertIn("/api/cheats/detect", patterns)
+        """功能路由要真的接进应用。
+
+        M3a 之前这里断言的是骨架端点 ``/api/translate/status``；接线后该端点
+        已被真实的业务端点取代（状态在 ``/api/translate/state``），因此断言
+        跟着换成"每个功能都至少有一个自己的端点"这一**不会随版本失效**的
+        契约 —— 具体端点清单由各功能自己的测试负责（见
+        ``tests/features/translate/test_routes.py`` 的 EXPECTED）。
+        """
+        routes = self.app.context.router.describe()
+        patterns = {r["pattern"] for r in routes}
+        for required in ("/api/translate/providers", "/api/cheats/status",
+                         "/api/cheats/detect"):
+            with self.subTest(pattern=required):
+                self.assertIn(required, patterns)
+        for feature in ("translate", "cheats"):
+            owned = [r for r in routes if r["feature"] == feature]
+            with self.subTest(feature=feature):
+                self.assertTrue(owned, "%s 没有登记任何路由" % feature)
+                for route in owned:
+                    self.assertTrue(route["pattern"].startswith("/api/"),
+                                    "路由不在 /api 下：%s" % route["pattern"])
 
     def test_no_import_side_effects(self):
         """原实现 ``tool/server.py:434`` 在导入时就构造单例并起线程（B-25）。

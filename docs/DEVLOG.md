@@ -5,6 +5,107 @@
 
 ---
 
+## 2026-09-13 ｜ M3a 后端接线完成：翻译功能 17 个端点接入（含 N-15 与一处分层违规）
+
+### 改了什么
+
+| 文件 | 变更 |
+| --- | --- |
+| `features/translate/routes.py`（新，~570 行） | **翻译功能的后端接线**：17 个端点 —— `state` / `open` / `pick_folder` / `pick_font` / `scan` / `entries` / `entry` / `skip_all` / `start` / `providers` / `test` / `config`(GET+POST) / `build` / `backups` / `restore` / `open_dir`。含 `TranslateService`（会话持有者）、`_CancelBridge`（`CancelToken.is_cancelled()` → `is_set()`）、`sync_game_info()`（构建前校正 `session.info`） |
+| `features/translate/manifest.py` | 从骨架改为**薄壳**：构造服务 + 委托 `register_routes` + 声明页面；`health()` 增加"4 个适配器都能构造"检查；`core_deps` 补 `builder` / `fontutil` |
+| `core/sysdialog.py`（新，~200 行） | 原生对话框能力，从 `ui/native_pick.py` **下沉到 core**（见下"分层违规"）；`shell_candidates()` / `build_script()` 抽成**纯函数**以便在 CI 里断言 B-27 的修复 |
+| `core/formats/mv_mz_data.py` | **N-15**：`_walk_event_list` 删掉多余的一层 `list`；`_set_by_path` 按父容器类型归一化末段键 |
+| `core/safety/builder.py` | `_iter_entries()`：兼容 `Session.entries` 是 **keyed-dict**（键为 `"file|path"`、值为条目）这一真实形态；原先只做 `.values()` 会把条目当字段映射用 → `entry.get("status")` 静默取空 → **一条译文都写不进去** |
+| `core/context.py`（未改） | `ctx.translate_service` 由 `register_routes` 挂在 ctx 上，供测试与调试页取用（已在 docstring 声明为非公共 API） |
+| `tests/features/translate/test_routes.py`（新，88 例） | 17 个端点的**双向**契约核对 + 会话隔离夹具 + MV / VX Ace 两套合成夹具 + 端到端构建→写回→还原 |
+| `tests/unit/test_sysdialog.py`（新，23 例） | B-27 修复点的可 CI 断言部分 |
+| `tests/features/translate/test_scan_regressions.py` | 新增 `TestN15MVEventPathShape`（4 例） |
+| `tests/unit/test_app.py`、`tests/unit/test_server.py` | 骨架端点 `/api/translate/status` 的断言换成真实业务端点；server 侧新增 3 个**真 HTTP** 用例 |
+
+### 为什么（本轮两个"必须记"的发现）
+
+#### 1) **N-15**：MV/MZ 的事件对话**写不进汉化版，而且不报错**
+
+M2b 重构 `mv_mz_data._walk_event_list` 时，路径多拼了一层 `/list/`：
+
+```text
+实际产出：1/list/list/1/parameters/0     ← 多了一个 list
+正确形状：1/list/1/parameters/0          ← path_prefix 已经含 "list"
+```
+
+`apply_to_files` 按路径定位失败 → **所有 401 对话与 402 选择项都写不进去**。
+危害在于**每一层都是"成功"的**：扫描条数正常、界面显示正常、统计正常、
+任务状态 `done`、构建返回 `entries: 2` —— 只有打开游戏才会发现剧情还是原文。
+
+同一函数还有第二处：`_set_by_path` 只归一化**中间段**，末段原样返回字符串，
+于是 `list[str]` 抛 `TypeError`，被上层 `except` 吞掉又是一种静默丢条目。
+
+**怎么发现的**：M3a 写"构建后把文件读回来核对译文"的端到端用例时暴露的 ——
+如果只断言"任务成功"，这个缺陷会一路进到用户手里。
+
+#### 2) 一处**分层违规**：`features` 反向 import `ui`
+
+第一次把对话框抽成 `ui/native_pick.py`，`features/translate/routes.py` 里
+`from ui import native_pick` —— `python tools/check_footprint.py` 立刻报错：
+
+```text
+[ERROR][F-09] ... core/features 分层违规
+```
+
+这条不是"检查器太严"，而是**架构真的错了**：分层规定 `features → core`、
+`ui → core + features`。**"弹一个系统对话框"与业务和界面都无关**
+（和剪贴板同级），正确位置是 `core/sysdialog.py`；`ui/` 里只应有 HTTP 门面。
+
+顺带一个收益：放进 `core` 后把 `shell_candidates()` 与 `build_script()` 抽成
+纯函数，于是 **B-27（写死 PowerShell 绝对路径）的修复本身可以被 CI 断言**,
+而不是只能靠"在一台机器上手点一次"。
+
+### 怎么验证
+
+```powershell
+python tests/run_all.py                      # 585 例，0 失败 0 错误
+python tools/check_footprint.py --quiet      # 39 文件 / 2 功能，退出码 0
+python app.py --check                        # 退出码 0
+$env:TUDOU_RPGTOOL_SAMPLES='D:\gamess'
+python tests/run_all.py --suite compat       # 300 个 .rvdata2 零漂移 + 扫描量级断言
+```
+
+**关键证据**（不是"跑通了"，而是"内容真的变了"）：
+
+| 断言 | 结果 |
+| --- | --- |
+| MV 构建后 `data/CommonEvents.json` 的 401 参数 | `"你好，旅行者。"` → `"旅行者"`（**N-15 的判据**） |
+| MV 构建后 402 参数 | `["是","否"]` → `["旅行者","旅行者"]` |
+| VX Ace 构建后 `Data/CommonEvents.rvdata2` 的 401 参数（重新解析字节流） | `"旅行者"` |
+| `copy` 模式后原游戏目录指纹 | **字节不变** |
+| 未确认覆盖已有输出 | 任务 `error: OverwriteNotConfirmed` |
+| `inplace` 构建 | 一定生成 `backup_dir`，且 `list_backups` 能看到它（`has_manifest: true`） |
+| 还原后 | 原文 `"你好，旅行者。"` 真的回来了，且还原前自动再备份一次 |
+
+### 写测试时踩到的坑（值得记）
+
+1. **后台任务必须先 `jobs.wait` 再断言**。`skip_all` 用例最初漏了这一步，
+   于是断言与任务执行竞争 —— 同样的代码有时 0、有时 3，**间歇性红**。
+   这类"偶发失败"最容易被误判成业务缺陷，已在用例注释里写明原因。
+2. **`route.feature` 只有在 Registry 装配路径下才有值**。直接调
+   `manifest.register(ctx)` 得到的是 `None` —— 想测"路由归属"就必须走
+   `Registry.register_all(ctx)`，然后按 feature 过滤（注册表会装配所有功能）。
+3. **handler 取用要包 `staticmethod`**。把普通函数赋成类属性后经 `self.handler`
+   取会触发描述符协议变成 bound method，于是 `handler(Request)` 会多传一个
+   `self`（M1 已经踩过一次，这次在探针脚本里又踩了一次）。
+4. Windows 上 `TemporaryDirectory.cleanup` 会与刚写完会话文件的后台线程撞车
+   （`OSError: [WinError 145] 目录不是空的`）→ 夹具用
+   `ignore_cleanup_errors=True`（3.10+，3.8/3.9 自动退回）。
+
+### 遗留
+
+* **前端未接**：`ui/web/pages/translate.js` 仍是 M1 骨架，17 个端点只有
+  `test_server.py` 的 3 个真 HTTP 用例覆盖"HTTP 层能通"（M4 统一界面时接入）
+* MZ / XP 的端到端构建目前只有合成样本覆盖；真实样本待 M5 补齐
+* M3b（`cheats` 的 5 类存档读写改回读）未开始
+
+---
+
 ## 2026-09-12 ｜ M3a 开工：扫描链路跑通，并修掉三个"静默丢功能"缺陷（N-12/13/14）
 
 ### 改了什么

@@ -404,16 +404,50 @@ def apply_font(game_root, engine, font_path, touched_log=None, created_log=None)
 # ---------------------------------------------------------------------------
 # 主入口
 # ---------------------------------------------------------------------------
+def _entry_field(entry, name, default=None):
+    """从条目取字段（兼容 dict 与对象两种形态；dict 也可能来自 JSON 会话文件）。"""
+    if isinstance(entry, dict):
+        return entry.get(name, default)
+    return getattr(entry, name, default)
+
+
+def _iter_entries(session):
+    """把会话里的条目归一化成"条目序列"。
+
+    两种真实形态都要支持（M3a 实测踩到）：
+
+    * ``features.translate.session.Session.entries`` 是 **dict**，
+      但键是 ``"file|path"``、**值是条目本身**（不是字段名→值的映射）；
+    * 其它调用方可能传一个条目列表。
+
+    原来的实现只做 ``entries.values()``，对上面的 keyed-dict 会把条目原样
+    当字段映射用，于是 ``entry.get("status")`` 静默取不到 —— 表现为
+    "生成汉化版时一条译文都没写进去"。
+    """
+    entries = getattr(session, "entries", None)
+    if entries is None:
+        return []
+    if isinstance(entries, dict):
+        values = list(entries.values())
+    elif isinstance(entries, (list, tuple)):
+        values = list(entries)
+    else:
+        return []
+    # 兼容"字段名 -> 值"的映射（例如 session 被序列化成单个 dict）
+    if values and all(not isinstance(v, (dict,)) and not hasattr(v, "status")
+                      for v in values):
+        return []
+    return values
+
+
 def _group_entries(session):
     """按文件聚合"已翻译且有译文"的条目。"""
     by_file = {}
-    entries = getattr(session, "entries", None) or {}
-    values = entries.values() if isinstance(entries, dict) else entries
-    for entry in values:
-        status = getattr(entry, "status", None) or entry.get("status")
-        translated = getattr(entry, "translated", None) or entry.get("translated")
+    for entry in _iter_entries(session):
+        status = _entry_field(entry, "status")
+        translated = _entry_field(entry, "translated")
         if status == "translated" and translated:
-            name = getattr(entry, "file", None) or entry.get("file")
+            name = _entry_field(entry, "file")
             by_file.setdefault(name, []).append(entry)
     return by_file
 

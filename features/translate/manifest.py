@@ -14,12 +14,14 @@
 
 from __future__ import annotations
 
+from .routes import TranslateService, register_routes
+
 #: 功能自描述。必备字段：id / name / icon / version / description。
 MANIFEST = {
     "id": "translate",
     "name": "文本翻译",
     "icon": "文",
-    "version": "0.1.0",
+    "version": "0.3.0",
     "description": "扫描游戏内全部文本，批量翻译后生成汉化版；支持 MV / MZ / VX Ace / XP 与加密 JSON 包装。",
     "order": 10,
 
@@ -32,6 +34,8 @@ MANIFEST = {
         "core.marshal.doc_model",
         "core.safety.backup",
         "core.safety.atomic",
+        "core.safety.builder",
+        "core.safety.fontutil",
     ),
 
     #: API 命名空间前缀（本模块登记的路由都应以此开头）
@@ -58,42 +62,21 @@ MANIFEST = {
 def register(ctx):
     """把翻译功能装配进应用。
 
-    M1 阶段只登记路由占位与页面，真正的扫描/翻译/生成链路在 M3a 接线。
+    M3a 起这里只做两件事：**构造功能自己的服务对象**（持有会话状态）、
+    **把路由登记委托给 routes 模块**。真正的业务链路在
+    :mod:`features.translate.routes`，本文件保持"描述自己"的薄壳形态 ——
+    这是"新增功能只插一块"的样板，后续里程碑不应把业务代码搬回来。
+
     本函数**只通过 ctx 暴露的接口**操作，不触碰 app / server 内部。
     """
-    state = {"feature": "translate", "status": "skeleton",
-             "detail": "M1 骨架：功能已注册，业务链路在 M3a 接线"}
-
-    @ctx.get("/api/translate/status", name="translate_status")
-    def translate_status(request=None):
-        """翻译功能自身的状态（M1 为骨架占位）。"""
-        return dict(state)
-
-    @ctx.get("/api/translate/providers", name="translate_providers")
-    def translate_providers(request=None):
-        """列出可用的翻译引擎适配器（来自 vendored translators 模块）。"""
-        from . import translators
-        return {
-            "providers": [
-                {"id": "google", "name": "Google 翻译",
-                 "need_key": False, "note": "免费接口，无需密钥"},
-                {"id": "openai", "name": "OpenAI 兼容接口",
-                 "need_key": True, "note": "可填 OpenAI / DeepSeek / Kimi / Qwen 等"},
-                {"id": "ollama", "name": "本地 Ollama",
-                 "need_key": False, "note": "默认 http://localhost:11434/v1"},
-                {"id": "deepl", "name": "DeepL",
-                 "need_key": True, "note": "需要 DeepL API Key"},
-            ],
-            "module_loaded": bool(translators),
-            "skeleton": True,
-        }
-
+    service = TranslateService(ctx)
+    count = register_routes(ctx, service)
     ctx.page(MANIFEST["pages"][0])
-    return "registered (skeleton)"
+    return "registered (%d routes)" % count
 
 
 def health():
-    """翻译功能的健康检查：core 依赖是否都能 import。"""
+    """翻译功能的健康检查：core 依赖是否都能 import + 关键能力可用。"""
     import importlib
     missing = []
     for name in MANIFEST["core_deps"]:
@@ -103,8 +86,18 @@ def health():
             missing.append("%s (%s: %s)" % (name, type(exc).__name__, exc))
     if missing:
         return {"status": "error", "detail": "缺少 core 依赖：" + "; ".join(missing)}
+    problems = []
+    # 有出网能力才有"批量翻译"；没有的话功能是残的，必须报出来。
+    try:
+        from . import translators
+        for kind in ("google", "openai", "ollama", "deepl"):
+            translators.build_translator({"engine": kind, "api_key": "x"})
+    except Exception as exc:
+        problems.append("翻译引擎适配器不可用：%s: %s" % (type(exc).__name__, exc))
+    if problems:
+        return {"status": "error", "detail": "；".join(problems)}
     return {"status": "ok",
-            "detail": "core 依赖齐全（%d 项）；功能链路待 M3a 接线"
+            "detail": "core 依赖齐全（%d 项）；4 个翻译引擎适配器可用"
                       % len(MANIFEST["core_deps"])}
 
 

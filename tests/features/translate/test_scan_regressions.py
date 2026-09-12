@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
-"""M3a 接线期发现并修复的缺陷的回归测试（N-12 / N-13 / N-14）。
+"""M3a 接线期发现并修复的缺陷的回归测试（N-12 / N-13 / N-14 / N-15）。
 
 @feature  translate
 @layer    tests
-@public   TestN14SymLinkResolution, TestN13TextOfProxies,
-          TestN12ContainerNormalization, TestRealGameScanVolume
-@depends  core.marshal.doc_model, core.marshal.value_layer, core.formats.rgss_data
+@public   TestN15MVEventPathShape, TestN14SymLinkResolution,
+          TestN13TextOfProxies, TestN12ContainerNormalization,
+          TestRealGameScanVolume
+@depends  core.marshal.doc_model, core.marshal.value_layer,
+          core.formats.rgss_data, core.formats.mv_mz_data
 @tested   (本文件即测试)
 @footprint docs/STATE.md
 
@@ -22,12 +24,20 @@ M2b 把 `core/formats/rgss_data.py` 从 `value_model` 切到 `value_layer`、
 * **N-12** ``RPG::Map#@events`` 是 **Hash**，而 vendored 代码用 ``enumerate``
   当列表遍历 → ``RMDict.__getitem__(0)`` 抛 ``KeyError: 0``
 
+M3a 接线（写 `features/translate/routes.py` 的构建用例）时又发现第四个
+同性质的坑：
+
+* **N-15** MV/MZ 事件条目的路径多拼了一层 ``/list/``（``1/list/list/1/...``）
+  → 扫描/统计/界面全部正常，但 ``apply_to_files`` 按路径写回时定位失败 →
+  **所有事件对话与选择项都写不进汉化版，且不报错**
+
 本文件把这些"静默丢功能"的坑钉死，并加一条真实样本的量级断言：
 **提取量骤降必须被测试发现**，而不是等到用户发现译文变少。
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import unittest
@@ -42,6 +52,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from core import paths  # noqa: E402
+from core.formats import mv_mz_data  # noqa: E402
 from core.formats import rgss_data  # noqa: E402
 from core.marshal import doc_model as D  # noqa: E402
 from core.marshal import value_layer as V  # noqa: E402
@@ -307,6 +318,119 @@ class TestRealGameScanVolume(unittest.TestCase):
                            "VX Ace 的对话条目过少：%s" % by_category)
         self.assertGreater(by_category.get("名称", 0), 100,
                            "VX Ace 的名称条目过少：%s" % by_category)
+
+
+class TestN15MVEventPathShape(unittest.TestCase):
+    """**N-15**：MV/MZ 事件条目的路径必须能被 ``apply_to_files`` 落下去。
+
+    缺陷形态：``_walk_event_list`` 多拼了一层 ``/list/``，产出
+    ``1/list/list/1/parameters/0``。**扫描、统计、界面全部正常**，
+    所以只有"生成汉化版之后打开游戏看"才会发现剧情还是原文。
+    这里直接对"路径能不能定位到真实文本"下断言 —— 不依赖 UI、不依赖构建。
+    """
+
+    #: 真实的 MV ``CommonEvents.json`` 形状（``list`` 是 ``obj["list"]``）
+    COMMON_EVENTS = [
+        None,
+        {"id": 1, "name": "开场", "list": [
+            {"code": 101, "indent": 0, "parameters": [""]},
+            {"code": 401, "indent": 0, "parameters": ["你好，旅行者。"]},
+            {"code": 402, "indent": 0, "parameters": [["是", "否"], 1, 0]},
+            {"code": 0, "indent": 0, "parameters": []},
+        ]},
+    ]
+
+    def setUp(self):
+        from features.translate.session import ScanOptions
+        self.entries = []
+        mv_mz_data._walk_event_list(self.entries, "CommonEvents.json",
+                                    self.COMMON_EVENTS[1]["list"], "1/list",
+                                    "公共事件 1", False)
+        self.opts = ScanOptions()
+
+    def test_event_paths_contain_list_exactly_once(self):
+        self.assertTrue(self.entries, "事件指令一条都没提取到")
+        for entry in self.entries:
+            with self.subTest(path=entry["path"]):
+                self.assertNotIn("list/list", entry["path"],
+                                 "**N-15**：路径里出现了重复的 list 层：%s"
+                                 % entry["path"])
+
+    def test_event_paths_resolve_to_real_text(self):
+        """路径必须真的指向原文 —— 这才是"能写回"的判据。"""
+        self.assertTrue(self.entries)
+        for entry in self.entries:
+            parent, key = mv_mz_data._set_by_path(
+                json.loads(json.dumps(self.COMMON_EVENTS, ensure_ascii=False)),
+                entry["path"])
+            with self.subTest(path=entry["path"]):
+                self.assertEqual(parent[key], entry["original"],
+                                 "路径定位到的不是原文（写回会改错东西）")
+
+    def test_choice_paths_resolve(self):
+        """402 选择项是"列表里的列表"，子下标不能省。"""
+        choices = [e for e in self.entries if e["category"] == "选择项"]
+        self.assertEqual([e["original"] for e in choices], ["是", "否"])
+        for entry in choices:
+            parent, key = mv_mz_data._set_by_path(
+                json.loads(json.dumps(self.COMMON_EVENTS, ensure_ascii=False)),
+                entry["path"])
+            self.assertEqual(parent[key], entry["original"])
+
+    def test_set_by_path_normalizes_last_key_to_container_type(self):
+        """末段键类型必须与父容器一致（N-15 的第二处）。
+
+        路径段来自 ``split("/")``，永远是字符串；父容器是 ``list`` 时键必须
+        是 ``int``。原实现只归一化中间段，末段原样返回字符串 →
+        ``list[str]`` 抛 ``TypeError``，被上层吞掉即"静默丢条目"。
+        """
+        data = {"a": [{"b": "旧值"}]}
+        for path in ("a/0/b", "a/0"):
+            parent, key = mv_mz_data._set_by_path(data, path)
+            with self.subTest(path=path):
+                expected = int if isinstance(parent, list) else str
+                self.assertIsInstance(key, expected,
+                                      "末段键类型与容器不符：%r → %r" % (path, key))
+            parent[key] = "新值"          # 不抛异常即说明类型对了
+        self.assertEqual(data["a"][0], "新值")
+
+    def test_scan_and_writeback_agree_on_path(self):
+        """端到端：``extract`` 产出的路径必须能被 ``apply_to_files`` 认出来。
+
+        只测 ``_walk_event_list`` 不够 —— 真实链路是 ``extract`` 组装路径、
+        ``apply_to_files`` 消费它；两者的前缀约定必须一致。
+        """
+        import tempfile
+        from features.translate.session import Session
+
+        with tempfile.TemporaryDirectory(prefix="n15_") as tmp:
+            game = os.path.join(tmp, "game")
+            os.makedirs(os.path.join(game, "js"))
+            os.makedirs(os.path.join(game, "data"))
+            with open(os.path.join(game, "js", "rpg_core.js"), "w") as f:
+                f.write("//\n")
+            path = os.path.join(game, "data", "CommonEvents.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.COMMON_EVENTS, f, ensure_ascii=False)
+
+            session = Session(game)
+            session.scan()
+            self.assertEqual(session.info["engine"], "mv")
+            for entry in session.entries.values():
+                entry["translated"] = "T-" + entry["original"]
+                entry["status"] = "translated"
+
+            stats = mv_mz_data.apply_to_files(session.info,
+                                              {"CommonEvents.json": list(session.entries.values())})
+            self.assertEqual(stats["entries"], len(session.entries),
+                             "有条目没写进去（N-15 复发）：%s" % stats)
+
+            with open(path, encoding="utf-8") as f:
+                after = json.load(f)
+            self.assertEqual(after[1]["list"][1]["parameters"][0], "T-你好，旅行者。",
+                             "事件对话没有写进数据文件")
+            self.assertEqual(after[1]["list"][2]["parameters"][0],
+                             ["T-是", "T-否"], "选择项没有写进数据文件")
 
 
 if __name__ == "__main__":

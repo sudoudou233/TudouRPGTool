@@ -20,6 +20,9 @@
 | 备份/还原行为不对 | `core/safety/backup.py` |
 | 想加一个新功能 | `docs/FEATURES.md#契约` → `core/registry.py` / `core/context.py` |
 | 长任务卡住 / 不能取消 | `core/jobs.py` |
+| 翻译功能的接口要改 | `features/translate/routes.py`（接口清单在 `test_routes.py::EXPECTED`） |
+| "生成汉化版"没写进译文 | 先查 `mv_mz_data._set_by_path` / `rgss_data._navigate` 的**路径约定**（N-15、N-07 都出在这里） |
+| 选游戏/选字体的对话框弹不出来 | `core/sysdialog.py`（B-27） |
 | 界面样式不统一 | `ui/web/tokens.css` + `components.css` + `docs/UI_SPEC.md` |
 | 新增一个页面 | `features/<name>/manifest.py` 里加 `pages` 一条 + 新建 `ui/web/pages/<id>.js` |
 | 足迹校验报错 | `tools/check_footprint.py`（12 条规则见文件头 RULES） |
@@ -110,6 +113,27 @@
 | 改动影响 | 影响**所有文本提取与翻译重组**。改正则要同步 `tests/unit/test_textutil.py` |
 | ⚠ 已知问题 | N-08：注释声称支持 `\{ \} \^ \| \. \! \> \< \$`，但正则要求反斜杠后必须是字母 → 这些符号型转义从不被匹配（M2a 处置）。测试里有一条**固化当前行为**的用例，修好时会失败以提醒更新 |
 
+### core/sysdialog.py
+
+| 项 | 内容 |
+| --- | --- |
+| 职责 | 原生系统对话框（选文件夹 / 选字体文件）：tkinter 优先，PowerShell 回退 |
+| 公开 API | `pick_folder()`、`pick_font()`、`available()`、`DialogUnavailable`、`shell_candidates()`、`build_script()`、`FONT_FILTER` |
+| 谁调用 | `features/translate/routes.py`（`pick_folder` / `pick_font` 两个端点） |
+| 改动影响 | 只影响"选路径"的交互；不参与任何写盘路径 |
+| 迁移来源 | 原翻译工具**内联在** `tool/server.py:65-87`，且写死了 PowerShell 绝对路径（**B-27**） |
+
+**为什么放在 `core` 而不是 `ui`**：M3a 首次把它抽成 `ui/native_pick.py`，
+足迹校验 **F-09** 立刻报错 —— `features/translate/routes.py` 反向 import 了
+`ui`，违反"`features → core`、`ui → features`"的单向依赖。**弹系统对话框是
+与业务和界面都无关的系统能力**（和剪贴板同级），因此正确位置是 `core`；
+`ui/` 里只有 HTTP 门面。
+
+**可测性设计**：`shell_candidates()` 与 `build_script()` 是纯函数（不弹窗、
+不起进程），所以"B-27 的修复"本身可以被 CI 完整断言；真正弹窗的 `pick()`
+只在有图形环境的机器上执行。降级契约（两者都不可用 → `DialogUnavailable`）
+由 `tests/unit/test_sysdialog.py` 钉死。
+
 ### core/marshal/（⚠ 临时含两份实现）
 
 | 文件 | 职责 | 公开 API | 谁调用 |
@@ -157,7 +181,7 @@
 | --- | --- | --- | --- |
 | `atomic.py` | **唯一的写盘手段**：原子写 + 备份文件 + 目标护栏 | `atomic_write_bytes()`、`atomic_write_text()`、`sibling_backup()`、`assert_safe_target()`、`next_free_dir()`、`unique_temp_path()`、`AtomicWriteError`、`SafeTargetError` | 所有需要写文件的模块 |
 | `backup.py` | 备份 / 还原 / 清单（**不 import `core.formats`** —— 这是切断 import 环的关键） | `backup_files()`、`restore_backup()`、`list_backups()`、`safety_backup()`、`write_manifest()`、`read_manifest()`、`record_created()`、`BACKUP_PREFIX`、`MANIFEST_NAME` | `builder.py`、M3a/M3b 接线 |
-| `builder.py` | **生成汉化版的编排层**：暂存换名（B-01）、字体应用（B-03）、失败回滚（B-06）、覆盖确认（B-05） | `build()`、`apply_font()`、`copy_tree()`、`default_target_dir()`、`resolve_target_dir()`、`font_touched_paths()`、`patch_core_js()`、`inject_font_script()`、`install_user_font()`、`OverwriteNotConfirmed`、`BuildFailed`、`FONT_FALLBACK_NAMES` | `features/translate/manifest.py`（M3a 接线） |
+| `builder.py` | **生成汉化版的编排层**：暂存换名（B-01）、字体应用（B-03）、失败回滚（B-06）、覆盖确认（B-05） | `build()`、`apply_font()`、`copy_tree()`、`default_target_dir()`、`resolve_target_dir()`、`font_touched_paths()`、`patch_core_js()`、`inject_font_script()`、`install_user_font()`、`OverwriteNotConfirmed`、`BuildFailed`、`FONT_FALLBACK_NAMES` | `features/translate/routes.py`（M3a 接线） |
 | `fontutil.py` | 字体族名解析（ttf/otf/ttc） | `extract_family()`、`safe_filename()` | `builder.py` |
 
 **依赖方向（务必保持）**：
@@ -183,20 +207,39 @@ atomic  ←  backup  ←  builder  →  fontutil
 | 文件 | 职责 | 公开 API | 谁调用 |
 | --- | --- | --- | --- |
 | `features/__init__.py` | 包标记 + 契约说明 | `LAYER`、`REQUIRED_FILE` | — |
-| `features/translate/manifest.py` | 翻译功能的自我描述与注册 | `MANIFEST`、`register()`、`health()` | `core/registry.py` |
-| `features/translate/translators.py` | 4 个翻译引擎适配器 + 批量翻译执行器（vendored） | `build_translator`、`translate_entries`、`TranslateError`、`TruncatedError`、`GoogleTranslator`、`OpenAICompatibleTranslator`、`DeepLTranslator`、`_http` | M3a 接线 |
-| `features/translate/session.py` | 翻译会话与进度持久化（vendored） | `Session`、`ScanOptions`、`DEFAULT_OPTIONS` | M3a 接线 |
+| `features/translate/manifest.py` | 翻译功能的自我描述与注册（**薄壳**：构造服务 + 委托路由 + 页面） | `MANIFEST`、`register()`、`health()` | `core/registry.py` |
+| `features/translate/routes.py` | **翻译功能的后端接线**（M3a）：扫描 / 编辑 / 翻译 / 生成汉化版 / 备份还原，17 个端点 | `TranslateService`、`register_routes()`、`PROVIDERS`、`session_id_for()`、`session_path_for()`、`MAX_PAGE_SIZE`、`DEFAULT_PAGE_SIZE` | `features/translate/manifest.py` |
+| `features/translate/translators.py` | 4 个翻译引擎适配器 + 批量翻译执行器（vendored） | `build_translator`、`translate_entries`、`TranslateError`、`TruncatedError`、`GoogleTranslator`、`OpenAICompatibleTranslator`、`DeepLTranslator`、`_http` | `features/translate/routes.py` |
+| `features/translate/session.py` | 翻译会话与进度持久化（vendored） | `Session`、`ScanOptions`、`DEFAULT_OPTIONS` | `features/translate/routes.py` |
 | `features/cheats/manifest.py` | 修改功能的自我描述与注册 | `MANIFEST`、`register()`、`health()` | `core/registry.py` |
 | `features/cheats/__init__.py` | 包标记 | `manifest` | — |
 
-**功能注册的路由**（M1 现状）：
+**功能注册的路由**（M3a 现状）：
 
 | 路由 | 功能 | 状态 |
 | --- | --- | --- |
-| `GET /api/translate/status` | translate | 骨架占位 |
+| `GET /api/translate/state` | translate | **可用**（会话状态 / 计数 / 类别分布 / 上次构建结果） |
+| `POST /api/translate/open` | translate | **可用**（校验目录 + 建会话，复用断点续传） |
+| `POST /api/translate/pick_folder`、`pick_font` | translate | **可用**（原生对话框；取消返回 `cancelled: true`） |
+| `POST /api/translate/scan` | translate | **可用**（后台任务） |
+| `GET /api/translate/entries` | translate | **可用**（分页 + 关键词 + 类别 + 状态过滤） |
+| `POST /api/translate/entry` | translate | **可用**（改单条译文 / 状态，即时落盘） |
+| `POST /api/translate/skip_all` | translate | **可用**（后台任务，可限定类别） |
+| `POST /api/translate/start` | translate | **可用**（后台任务 + 进度/取消；空 Key 不覆盖已存 Key） |
 | `GET /api/translate/providers` | translate | **可用**（列出 4 个适配器） |
+| `POST /api/translate/test` | translate | **可用**（接口自检，出网一次；失败按返回值上报） |
+| `GET`/`POST /api/translate/config` | translate | **可用**（读**掩码**返回 / 写盘） |
+| `POST /api/translate/build` | translate | **可用**（后台任务；覆盖必须 `confirm=true`） |
+| `GET /api/translate/backups` | translate | **可用**（列出备份及其清单） |
+| `POST /api/translate/restore` | translate | **可用**（还原前自动再备份一次） |
+| `POST /api/translate/open_dir` | translate | **可用**（在文件管理器中打开目录） |
 | `GET /api/cheats/status` | cheats | 骨架占位 |
 | `POST /api/cheats/detect` | cheats | **可用**（引擎识别 + 存档发现，走 `core/engines.py`） |
+
+**⚠ 后端已就绪、前端页面仍是 M1 骨架**：`ui/web/pages/translate.js` 尚未接
+这些端点（M4 统一界面时完成）。接口清单由
+`tests/features/translate/test_routes.py::TestRouteRegistration.EXPECTED`
+**双向**核对（少一个或多一个都红灯）。
 
 ---
 
@@ -291,3 +334,5 @@ atomic  ←  backup  ←  builder  →  fontutil
 | `core/formats/mv_mz_data.py`、`rgss_data.py`、`core/textutil.py` | 仅 `translate` |
 | `core/formats/mv_save.py`、`rgss_save.py`、`core/marshal/` | 仅 `cheats`（`marshal` 也被 `translate` 的 RGSS 数据路径使用） |
 | `core/safety/backup.py`、`builder.py`、`fontutil.py` | 仅 `translate` |
+| `core/sysdialog.py` | 仅 `translate` 的两个选路径端点（将来别的功能也能直接用） |
+| `features/translate/routes.py` | 仅 `translate`（前端页面 M4 接入） |

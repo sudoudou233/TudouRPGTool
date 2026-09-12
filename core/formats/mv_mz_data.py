@@ -143,6 +143,20 @@ def _choice_texts(value):
 
 
 def _walk_event_list(entries, fname, ev_list, path_prefix, note_prefix, include_comments):
+    """遍历事件指令列表，登记可翻译文本。
+
+    ⚠ ``path_prefix`` **已经包含 ``list`` 这一层**（调用方传的是
+    ``"1/list"`` / ``"events/0/pages/0/list"``），因此这里的路径必须写成
+    ``"%s/%d/parameters/%d"``。
+
+    **N-15（M3a 接线实测发现）**：M2b 重构时这里多拼了一层 ``/list/``，
+    于是产出的路径是 ``1/list/list/1/parameters/0``。扫描、统计、界面
+    显示全部正常（所以不会有人注意到），但 ``apply_to_files`` 按路径写回时
+    定位失败 → **MV/MZ 的所有事件对话与选择项都写不进汉化版，且不报错**。
+    表现就是"生成成功、数据库名词翻译了、剧情对话还是原文"。
+    该缺陷与 N-12/13/14 同一性质（静默丢功能），已由
+    ``tests/features/translate/test_routes.py`` 的构建用例钉死。
+    """
     for i, cmd in enumerate(ev_list or []):
         if not isinstance(cmd, dict) or "code" not in cmd:
             continue
@@ -179,7 +193,7 @@ def _walk_event_list(entries, fname, ev_list, path_prefix, note_prefix, include_
             for sub_i, sub_text in enumerate(values):
                 if not isinstance(sub_text, str) or not has_real_text(sub_text):
                     continue
-                path = "%s/list/%d/parameters/%d/%d" % (path_prefix, i, idx, sub_i)
+                path = "%s/%d/parameters/%d/%d" % (path_prefix, i, idx, sub_i)
                 entries.append({
                     "file": fname,
                     "path": path,
@@ -193,7 +207,7 @@ def _walk_event_list(entries, fname, ev_list, path_prefix, note_prefix, include_
             continue
 
         if isinstance(text, str) and has_real_text(text):
-            path = "%s/list/%d/parameters/%d" % (path_prefix, i, idx)
+            path = "%s/%d/parameters/%d" % (path_prefix, i, idx)
             entries.append({
                 "file": fname,
                 "path": path,
@@ -206,8 +220,7 @@ def _walk_event_list(entries, fname, ev_list, path_prefix, note_prefix, include_
 
 
 def _add(entries, fname, path, category, original, note=""):
-    if isinstance(original, str) and has_real_text(original):
-        entries.append({
+    if isinstance(original, str) and has_real_text(original):        entries.append({
             "file": fname,
             "path": path,
             "category": category,
@@ -322,7 +335,17 @@ def extract(data_dir, opts):
 
 
 def _set_by_path(data, path):
-    """Navigate path segments ('a/b/0/c') and return (parent, key)."""
+    """Navigate path segments ('a/b/0/c') and return (parent, key).
+
+    ⚠ **N-15 的第二处**：末段的键必须**按父容器的类型**归一化 ——
+    路径段永远是从字符串 ``split("/")`` 来的，但父容器是 ``list`` 时键必须
+    是 ``int``。原实现只在**中间段**做了 ``int(seg)``，末段原样返回字符串，
+    于是 ``list[str]`` 抛 ``TypeError: list indices must be integers``。
+    这类异常在旧代码里会被上层 ``except`` 吞掉 → 该条目静默丢失。
+
+    返回的键类型与容器一致后，调用方可以放心地 ``parent[key] = value``，
+    也方便测试直接断言"定位到的就是原文"。
+    """
     segs = path.split("/")
     cur = data
     for seg in segs[:-1]:
@@ -332,7 +355,10 @@ def _set_by_path(data, path):
             cur = cur[seg if seg in cur else int(seg)]
         else:
             raise KeyError(path)
-    return cur, segs[-1]
+    key = segs[-1]
+    if isinstance(cur, list):
+        key = int(key)
+    return cur, key
 
 
 def apply_to_files(game_info, entries_by_file, progress=None):

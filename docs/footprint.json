@@ -81,7 +81,7 @@
       "id": "translate",
       "name": "文本翻译",
       "icon": "文",
-      "version": "0.1.0",
+      "version": "0.3.0",
       "description": "扫描游戏内全部文本，批量翻译后生成汉化版；支持 MV / MZ / VX Ace / XP 与加密 JSON 包装。",
       "order": 10,
       "core_deps": [
@@ -91,7 +91,9 @@
         "core.formats.rgss_data",
         "core.marshal.doc_model",
         "core.safety.backup",
-        "core.safety.atomic"
+        "core.safety.atomic",
+        "core.safety.builder",
+        "core.safety.fontutil"
       ],
       "api_prefix": "/api/translate",
       "pages": [
@@ -292,7 +294,7 @@
       "footprint": "docs/MODULES.md#coreformats",
       "vendored": true,
       "note": "vendored：来自 rpgmaker_translation_tool/tool/mv_mz.py。 M2b 已把 JSON / 压缩 / 加密包装的**共同约定**收敛到 core/formats/jsoncodec.py，本文件只保留\"提取哪些字段、 改哪个键\"这类业务规则。 B-02 修复：写回走 core.safety.atomic（jsoncodec 转发的原子写）。",
-      "lines": 372
+      "lines": 398
     },
     "core/formats/mv_save.py": {
       "feature": "cheats",
@@ -528,7 +530,7 @@
       "tested": "tests/compat/test_build_backup.py, tests/compat/test_m2a_regressions.py",
       "footprint": "docs/MODULES.md#coresafety",
       "vendored": false,
-      "lines": 618
+      "lines": 652
     },
     "core/safety/fontutil.py": {
       "feature": "translate",
@@ -545,6 +547,23 @@
       "vendored": true,
       "note": "vendored：来自 rpgmaker_translation_tool/tool/fontutil.py。",
       "lines": 132
+    },
+    "core/sysdialog.py": {
+      "feature": "none",
+      "layer": "core",
+      "public": [
+        "pick_folder",
+        "pick_font",
+        "available",
+        "DialogUnavailable"
+      ],
+      "depends": [
+        "core.constants"
+      ],
+      "tested": "tests/unit/test_sysdialog.py",
+      "footprint": "docs/MODULES.md#coresysdialog",
+      "vendored": false,
+      "lines": 186
     },
     "core/textutil.py": {
       "feature": "translate",
@@ -644,7 +663,25 @@
       "tested": "tests/features/translate/",
       "footprint": "docs/FEATURES.md#translate",
       "vendored": false,
-      "lines": 112
+      "lines": 105
+    },
+    "features/translate/routes.py": {
+      "feature": "translate",
+      "layer": "features",
+      "public": [
+        "TranslateService",
+        "register_routes",
+        "PROVIDERS",
+        "session_id_for"
+      ],
+      "depends": [
+        "features.translate.session",
+        "features.translate.translators"
+      ],
+      "tested": "tests/features/translate/test_routes.py",
+      "footprint": "docs/FEATURES.md#translate",
+      "vendored": false,
+      "lines": 584
     },
     "features/translate/session.py": {
       "feature": "translate",

@@ -15,41 +15,70 @@
 | 功能 id | `translate` |
 | 用户可见名称 | 文本翻译 |
 | 图标 | 文 |
-| 版本 | 0.1.0 |
-| 状态 | **M1 骨架**（业务链路在 M3a 接线） |
-| 界面入口 | 导航项「文本翻译」→ `ui/web/pages/translate.js` |
-| 后端入口 | `features/translate/manifest.py` → `register(ctx)` |
+| 版本 | 0.3.0 |
+| 状态 | **后端已完成（M3a）**；前端页面待 M4 接入 |
+| 界面入口 | 导航项「文本翻译」→ `ui/web/pages/translate.js`（仍是 M1 骨架） |
+| 后端入口 | `features/translate/manifest.py` → `register(ctx)` → `routes.register_routes()` |
 | manifest | `features/translate/manifest.py` |
 | API 前缀 | `/api/translate` |
 | 声明的页面 | `{id: translate, title: 文本翻译, module: translate, order: 10}` |
-| 断言测试 | `tests/features/translate/test_manifest.py` |
+| 断言测试 | `tests/features/translate/test_manifest.py`、`test_routes.py`、`test_scan_regressions.py` |
 | 验证命令 | `python tests/run_all.py --suite features` |
 
-**已注册的 API 路由**
+**已注册的 API 路由**（17 条；清单由
+`test_routes.py::TestRouteRegistration.EXPECTED` **双向**核对）
 
-| 方法 | 路径 | 状态 | 作用 |
-| --- | --- | --- | --- |
-| GET | `/api/translate/status` | 骨架占位 | 返回功能状态 |
-| GET | `/api/translate/providers` | **可用** | 列出 4 个翻译引擎适配器（Google / OpenAI 兼容 / Ollama / DeepL） |
+| 方法 | 路径 | 作用 |
+| --- | --- | --- |
+| GET | `/api/translate/state` | 会话状态 / 计数 / 类别分布 / 上次构建结果 |
+| POST | `/api/translate/open` | 校验目录 + 建会话（复用断点续传；换目录自动新建） |
+| POST | `/api/translate/pick_folder` | 原生文件夹选择（取消返回 `cancelled: true`） |
+| POST | `/api/translate/pick_font` | 原生字体文件选择 |
+| POST | `/api/translate/scan` | 扫描文本（**后台任务**，4 个内容开关） |
+| GET | `/api/translate/entries` | 文本列表（分页 + 关键词 + 类别 + 状态） |
+| POST | `/api/translate/entry` | 改单条译文 / 状态（即时落盘，可断点续传） |
+| POST | `/api/translate/skip_all` | 批量标记跳过（**后台任务**，可限定类别） |
+| POST | `/api/translate/start` | 批量翻译（**后台任务**；进度/取消/重试/只重出错项） |
+| GET | `/api/translate/providers` | 列出 4 个翻译引擎适配器 |
+| POST | `/api/translate/test` | 接口自检（出网一次；失败按返回值上报，不 500） |
+| GET | `/api/translate/config` | 读全局设置（**API Key 已掩码**） |
+| POST | `/api/translate/config` | 写全局设置 |
+| POST | `/api/translate/build` | 生成汉化版（**后台任务**；覆盖必须 `confirm=true`） |
+| GET | `/api/translate/backups` | 列出备份（含清单，UI 展示备份路径用） |
+| POST | `/api/translate/restore` | 从备份还原（还原前自动再备份一次） |
+| POST | `/api/translate/open_dir` | 在文件管理器中打开目录 |
+
+**接口层的三条不变量**（都有断言，改动时必须保持）：
+
+1. **长任务一定走 `ctx.jobs`** —— 扫描 / 批量跳过 / 批量翻译 / 生成汉化版
+   都返回 `{ok, job}`，前端靠 `/api/job` 轮询进度并可取消
+2. **空 `api_key` / 掩码 `api_key` 不覆盖已存 Key** —— 前端回显的是掩码值，
+   照原样写回会把好 Key 清掉（要清空须显式 `clear_api_key: true`）
+3. **覆盖必须显式确认** —— 前端必须先弹二次确认再把 `confirm=true` 传下来，
+   否则 `builder.build` 抛 `OverwriteNotConfirmed`
 
 **依赖的 core 能力**（manifest 的 `core_deps`）
 
 `core.engines`、`core.textutil`、`core.formats.mv_mz_data`、`core.formats.rgss_data`、
-`core.marshal.value_model`、`core.safety.backup`、`core.safety.atomic`
+`core.marshal.doc_model`、`core.safety.backup`、`core.safety.atomic`、
+`core.safety.builder`、`core.safety.fontutil`
 
 **实现文件**
 
 | 文件 | 角色 |
 | --- | --- |
-| `features/translate/manifest.py` | 自描述与注册（**唯一装配入口**） |
-| `features/translate/translators.py` | 4 个引擎适配器 + `translate_entries()` 批量执行（vendored，M3a 接线） |
-| `features/translate/session.py` | 会话与进度持久化（vendored，M3a 接线） |
+| `features/translate/manifest.py` | 自描述与注册（**薄壳**：构造服务 + 声明页面） |
+| `features/translate/routes.py` | **后端接线**：17 个端点 + `TranslateService`（M3a） |
+| `features/translate/translators.py` | 4 个引擎适配器 + `translate_entries()` 批量执行（vendored） |
+| `features/translate/session.py` | 会话与进度持久化（vendored） |
 | `core/formats/mv_mz_data.py` | MV/MZ 游戏数据提取与写回 |
 | `core/formats/rgss_data.py` | VX Ace/XP 游戏数据提取与写回 |
-| `core/safety/backup.py` | 生成汉化版 / 备份还原 / 字体注入 |
+| `core/safety/builder.py` | 生成汉化版编排（暂存换名 / 回滚 / 字体 / 覆盖确认） |
+| `core/safety/backup.py` | 备份 / 还原 / 清单 |
 | `core/safety/fontutil.py` | 字体族名解析 |
+| `core/sysdialog.py` | 原生文件夹 / 字体对话框 |
 | `core/textutil.py` | 控制码保护 |
-| `ui/web/pages/translate.js` | 前端页面 |
+| `ui/web/pages/translate.js` | 前端页面（M4 接入） |
 
 **功能覆盖范围**（不得缩水，逐条对照 `docs/迁移对照表.md` §A）
 
