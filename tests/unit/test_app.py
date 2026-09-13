@@ -122,15 +122,29 @@ class TestAppAssembly(unittest.TestCase):
         self.assertEqual(names, [], "导入 app 不应启动任何线程，实际：%s" % names)
 
     def test_importing_app_does_not_create_server(self):
+        """导入 ``app`` 不得绑定端口。
+
+        ⚠ **不能拿 ``DEFAULT_PORT`` 当判据**（实测踩到）：用户完全可能正在用
+        这个工具（双击启动后就常驻在那个端口），于是"默认端口上有监听"是
+        **正常情况**，测试会红得毫无道理 —— 一个会在正常使用下失败的断言，
+        最终只会训练人忽略红灯。
+
+        正确判据：拿一个**刚被系统确认空闲**的端口，导入 ``app`` 后它必须
+        **仍然是空闲的**。这样与"用户正在用默认端口"完全无关。
+        """
         probe = subprocess.run(
             [sys.executable, "-c",
              "import sys, socket; sys.path.insert(0, sys.argv[1]);\n"
+             "s0 = socket.socket(); s0.bind(('127.0.0.1', 0));\n"
+             "port = s0.getsockname()[1]; s0.close()\n"
              "import app\n"
-             "s = socket.socket()\n"
-             "print('BOUND=' + str(s.connect_ex(('127.0.0.1', app.DEFAULT_PORT)) == 0))\n",
+             "s = socket.socket(); s.settimeout(1.0)\n"
+             "print('BOUND=' + str(s.connect_ex(('127.0.0.1', port)) == 0))\n",
              _ROOT],
             capture_output=True, text=True, encoding="utf-8", cwd=_ROOT, timeout=120)
-        self.assertIn("BOUND=False", probe.stdout)
+        self.assertEqual(probe.returncode, 0, probe.stderr)
+        self.assertIn("BOUND=False", probe.stdout,
+                      "导入 app 时绑定了端口（原实现 tool/server.py:434 的副作用）")
 
 
 class TestSelfCheck(unittest.TestCase):

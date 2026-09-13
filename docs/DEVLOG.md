@@ -5,6 +5,99 @@
 
 ---
 
+## 2026-09-13 ｜ **白屏事故**：app.js 的块注释被自己提前闭合（用户报"一直加载中"）
+
+### 现象
+
+用户双击 `启动.bat` 后，浏览器里**永远停在「加载中…」，没有任何可交互内容**。
+没有弹窗、没有报错页 —— 就是不动。
+
+### 根因：一句通配路径写在块注释里
+
+`ui/web/app.js` 第 12 行：
+
+```text
+ *   1. 启动时 GET /api/nav 取导航 —— 后端由 features/*/manifest.py 自动发现
+                                                          ^^
+```
+
+`features/*` 与 `/manifest.py` 之间的**星号 + 斜杠**在块注释内部
+**提前闭合了注释**。于是从那里开始的整段中文散文变成了「代码」：
+
+```text
+SyntaxError: Unexpected identifier '自动发现'
+```
+
+`app.js` 是 ES 模块，**解析失败 = 一行都不执行**：`boot()` 没跑，
+导航、功能表、默认页全部保持 HTML 里的初始文案（「加载中…」）。
+
+### 为什么 880 个测试全都没抓到
+
+因为它们**全是文本断言**：
+
+| 已有断言 | 它检查的 |
+| --- | --- |
+| `test_page_exports_render` | 文件里**有** `export async function render` |
+| `test_imported_symbols_all_exist_in_dom_js` | import 的名字在 dom.js 里定义了 |
+| `test_every_called_endpoint_exists` | 调用的端点后端存在 |
+| `test_every_class_used_is_defined` | 类名都在 components.css 里 |
+
+**没有一条真的解析或执行过这些 js。** 文本对 ≠ 语法对。
+我上一轮甚至在 `web_probe` 之前用 `node --check` 手工查过一次 ——
+但那只查了 `translate.js`（当时刚写的那一个），没查 `app.js`。
+
+### 修法
+
+1. `app.js` 的注释改成不含该序列的写法（`features 下的 manifest.py`），
+   并在注释里写明这条硬规矩 —— **注意：我第一次写这条警告时又踩了一次**
+   （警告文字里为了举反例写了那个序列本身），被 `node --check` 当场抓住。
+   现在警告文案改成用「星号紧跟斜杠」描述，不写字面序列。
+2. 新增 `tests/integration/test_web_syntax.py`（11 例），两道防线：
+   * **静态**：`ui/web/**/*.js` 逐个 `node --check`（纯语法，不执行）；
+   * **动态**：`tools/web_probe.mjs` 在 Node 里用最小 DOM shim
+     **真实加载并执行** `index.html` + `app.js`，打真实接口，
+     逐个切换三个功能页，报告"页面是否从加载中变成了有内容的卡片"。
+3. `tools/web_probe.mjs`（新）就是这个 shim：静态 import 改成可 link 的
+   模块图、动态 import 改成同一加载器、`document` 最小实现。
+   人读模式 + `--json` 机器读模式。
+
+**Node 是可选的**：主体约束仍是"零第三方依赖（Python 标准库）"，
+Node 只用于这层前端冒烟；没装 Node 时整类 skip，不是失败。
+
+### 守卫有效性验证（**把 bug 放回去，确认测试真的红**）
+
+```powershell
+# 1) 注入当初那个写法
+features 下的 manifest.py  ->  features/*/manifest.py
+# 2) 跑守卫 → 11 条失败，症状与用户看到的一致：
+#    test_shell_boots_without_fatal_error
+#      "SyntaxError: Unexpected identifier '自动发现'" is not None
+#    test_nav_has_all_three_features         0 != 3
+#    test_feature_table_is_rendered          0 != 3   （仍是「加载中…」）
+#    test_default_page_renders_cards         0 not >= 3
+#    test_every_web_js_parses                app.js 无法解析
+# 3) 还原 → 11 例全过
+```
+
+### 怎么验证
+
+```powershell
+python tests/run_all.py                 # 880 例（原 869 + 11），退出码 0
+python tools/check_footprint.py         # 43 文件 / 3 功能，0 错误
+node --experimental-vm-modules tools/web_probe.mjs http://127.0.0.1:8765 ui/web
+# → 导航项 3、功能表 3 行、三个页面各 4~7 张卡片、失败=false
+```
+
+### 教训
+
+**"验证"必须覆盖被执行的东西。** 这个工程对 Python 侧做到了
+（真跑 AST、真跑 roundtrip、真起服务打 HTTP），但前端只停在文本层面 ——
+于是唯一一个"根本不执行"的失败模式恰好落在没人看的角落。
+补上执行层之后，同一类问题（任何语法错误、任何 import 名字写错）都会在
+1 秒内被抓住。
+
+---
+
 ## 2026-09-13 ｜ M5 复查：修掉自检页与健康检查的收敛状态矛盾、启动器选错解释器
 
 这两条都是**最后一遍端到端验收**时发现的 —— 而且是"文档说要做的验证

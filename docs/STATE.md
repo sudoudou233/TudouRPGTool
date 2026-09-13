@@ -227,6 +227,17 @@ N-16（0/False 被当"没有值"）、N-17（字段名不一致→校验空转�
 N-21（常量缺失→报告矛盾）、N-22（入口与开发环境不一致）都是这一类。
 **防止办法是让断言比对"两个来源"，而不是各自断言"我这边对"。**
 
+### **N-23（用户报告）**：前端白屏 —— app.js 的块注释被自己提前闭合
+
+| 项 | 内容 |
+| --- | --- |
+| 现象 | 双击 `启动.bat` 后浏览器**永远停在「加载中…」**，没有可交互内容；无弹窗、无报错页 |
+| 根因 | `ui/web/app.js` 的块注释里写了通配路径 `features/*` 与 `/manifest.py`，其中的**星号紧跟斜杠在注释内部提前闭合了注释** → 后面的中文散文变成代码 → `SyntaxError: Unexpected identifier '自动发现'` → ES 模块**一行都不执行** |
+| 为何 880 个测试没抓到 | 它们**全是文本断言**（"有 export render"、"类名都在 components.css 里"、"端点存在"）。**没有任何一条真的解析或执行过这些 js** —— 文本对 ≠ 语法对 |
+| 修法 | ① 注释改成 `features 下的 manifest.py`；② 新增 `tests/integration/test_web_syntax.py`（11 例）：`node --check` 静态语法 + `tools/web_probe.mjs`（Node 最小 DOM shim）**真实执行** `index.html` + `app.js`，逐个切换三个页面并报告卡片数与是否出现"页面加载失败" |
+| 守卫有效性 | **把 bug 放回去验证过**：注入后 11 条断言全红，症状与用户描述一致（导航 0 项、功能表 0 行、三个页面均报 `SyntaxError: Unexpected identifier '自动发现'`）；还原后全绿 |
+| 教训 | **"验证"必须覆盖被执行的东西。** Python 侧做到了（真 AST、真 roundtrip、真起服务打 HTTP），前端只停在文本层 —— 于是唯一一个"根本不执行"的失败模式恰好落在没人看的角落 |
+
 ### 真实样本扫描基线（M3a 实测，供后续对照）
 
 | 游戏 | 引擎 | 条目数 | 对话 | 耗时 |
@@ -244,11 +255,14 @@ N-21（常量缺失→报告矛盾）、N-22（入口与开发环境不一致）
 ## 6. 当前测试状态
 
 ```powershell
-python tests/run_all.py                      # 869 例，0 失败 0 错误
+python tests/run_all.py                      # 880 例，0 失败 0 错误
 python tests/run_all.py --quiet              # 退出码 0
 python tools/check_footprint.py --quiet      # 退出码 0（43 文件 / 3 功能）
 python app.py --check                        # 退出码 0（46 条路由）
 启动.bat                                     # 双击启动（等价于 python run.py）
+
+# 前端冒烟（需 Node；没装则测试自动 skip）：
+node --experimental-vm-modules tools/web_probe.mjs http://127.0.0.1:8765 ui/web
 ```
 
 | 测试层 | 用例数 | 说明 |

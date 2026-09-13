@@ -5,14 +5,24 @@
  * @layer    ui
  * @public   boot renderNav renderFeatureTable mountPage
  * @depends  dom.js
- * @tested   tools/check_footprint.py
+ * @tested   tools/check_footprint.py, tests/integration/test_web_syntax.py
  * @footprint docs/UI_SPEC.md#shell
  *
- * 关键设计（需求 §5.1"界面自动出现该功能的入口"）：
- *   1. 启动时 GET /api/nav 取导航 —— 后端由 features/*/manifest.py 自动发现
+ * 关键设计（需求 §5.1「界面自动出现该功能的入口」）：
+ *   1. 启动时 GET /api/nav 取导航 —— 后端由 features 下的 manifest.py 自动发现
  *   2. 点击导航项时动态 import(`/pages/${module}.js`) 并调用其 render(host)
  *   3. 因此新增功能 = 新增 features/<name>/ 目录 + 新增 ui/web/pages/<id>.js，
  *      本文件与 index.html 都**不需要修改**
+ *
+ * ⚠ 写注释时的硬规矩（**踩过一次，整个前端白屏**）：
+ *   块注释里不得出现「星号紧跟斜杠」这个两字符序列。它会在块注释内部
+ *   **提前闭合注释**，后面的散文就变成代码 —— 表现是模块解析失败、
+ *   app.js 一行都不执行，页面永远停在「加载中…」，而且除了浏览器控制台
+ *   之外没有任何提示。
+ *   最典型的来源是**通配路径**：把「features 斜杠星号」与「斜杠 manifest.py」
+ *   直接连写就会命中（本项目原先就是这么写的）。改用
+ *   features/<name>/manifest.py，或者把星号换成「全部」二字，都能避开。
+ *   这一条由 tests/integration/test_web_syntax.py 用 node --check 强制。
  * ------------------------------------------------------------------------- */
 
 import { $, el, getJSON, toast, escapeHTML } from './dom.js';
