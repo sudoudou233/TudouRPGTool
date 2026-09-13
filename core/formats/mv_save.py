@@ -94,12 +94,21 @@ class GameDataMV:
                 if not isinstance(oid, int):
                     continue
                 name = ent.get('name')
-                if isinstance(name, str):
-                    store[oid] = name
                 idx = ent.get('iconIndex')
+                has_name = isinstance(name, str)
+                has_icon = isinstance(idx, int)
+                # ⚠ 入库条件是"有名字**或**有图标"，不能只要求有名字：
+                # 真实 MOD 里存在"画得出图标但没有名字"的道具，只按名字入库
+                # 会让它在界面上彻底消失（用户连"有这件东西"都看不到）。
+                # RGSS 侧的 ``GameData`` 本来就是无条件入库的，这里对齐它 ——
+                # 同一个游戏换引擎不该少一批条目（N-30 顺带发现的不对称）。
+                if has_name:
+                    store[oid] = name
+                elif has_icon:
+                    store[oid] = ''
                 # 0 是"不显示图标"，但仍要记下来 —— 界面靠"有没有这个键"
                 # 区分"这件道具没图标"与"这个表不提供图标信息"。
-                if isinstance(idx, int):
+                if has_icon:
                     icons[oid] = idx
         data = self._load_json('Classes.json')
         if isinstance(data, list):

@@ -687,10 +687,16 @@ function renderParty(party) {
 
     const addInput = el('input', { type: 'number', placeholder: '数量', value: '1' });
     const addId = el('input', { type: 'number', placeholder: '物品 id' });
+    // 跳过了多少空槽位必须说出来 —— 否则用户看到"200 个武器槽位只有 78 行"，
+    // 会以为是工具漏读了（N-30 的教训：不静默隐藏）。
+    const stats = (party.catalog_stats || {})[kind] || {};
+    const hiddenNote = stats.hidden
+      ? `，另有 ${stats.hidden} 个空槽位未列出（数据表里有 id、但没名字也没图标）`
+      : '';
     host.append(el('hr', { class: 'divider' }));
     host.append(el('div', { class: 'row' }, [
       el('b', { text: label }),
-      el('span', { class: 'hint', text: `${rows.length} 项（含未持有）` }),
+      el('span', { class: 'hint', text: `${rows.length} 项（含未持有）${hiddenNote}` }),
     ]));
     host.append(filterRow);
     host.append(el('div', { class: 'table-wrap' }, [

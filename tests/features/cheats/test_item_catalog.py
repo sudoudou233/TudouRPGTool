@@ -37,6 +37,7 @@ for oid in sorted(table):                 # ← 遍历**整张数据表**
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import unittest
@@ -54,13 +55,106 @@ from tests.features.cheats.test_routes import (  # noqa: E402
     CheatsTestCase, make_mv_game, make_vxace_game)
 
 
+#: 数据表里的"空槽位"（有 id、没名字）。
+#:
+#: ⚠ **这是 N-30 的夹具**。原先的夹具只写了有名字的条目，于是
+#: ``test_missing_name_placeholder_is_hidden_when_unowned`` 那条断言
+#: **循环体一次都没进过** —— 名字和文档都写对了，实际什么都没验，
+#: 所以"空槽位没被跳过"这个缺陷一路活到用户手里（用户报的是
+#: "tot 的武器防具图标读取不对"，实际是列表里超过一半是空白占位行）。
+PLACEHOLDER_IDS = (30, 31)
+
+#: 夹具里"有名字但没图标"的那条（真实游戏里普遍存在，例如用户那个游戏的
+#: ``啊啊啊啊``）—— 用来验证"有名字就一定要列出来"。
+NAMED_NO_ICON_ID = 40
+
+
+def _patch_items_json(directory, www=False):
+    """MV：给 ``Items.json`` 补空槽位。
+
+    ⚠ MV 侧的空槽位必须是 ``"name": ""`` 而不是**缺 name 字段**：
+    ``GameDataMV._load_names`` 只在 ``isinstance(name, str)`` 时入库，
+    缺字段的条目**根本到不了 catalog**（这条路走不通，也就复现不了缺陷）。
+    真实游戏里两种都有，而能触发缺陷的是前者。
+    """
+    js_root = os.path.join(directory, "www") if www else directory
+    path = os.path.join(js_root, "data", "Items.json")
+    with open(path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+    have = {ent.get("id") for ent in payload if isinstance(ent, dict)}
+    for oid in PLACEHOLDER_IDS:
+        if oid not in have:
+            payload.append({"id": oid, "name": "", "price": 0,
+                            "consumable": True, "occasion": 0, "iconIndex": 0})
+    if NAMED_NO_ICON_ID not in have:
+        payload.append({"id": NAMED_NO_ICON_ID, "name": "啊啊啊啊", "price": 0,
+                        "consumable": True, "occasion": 0, "iconIndex": 0})
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(payload, f, ensure_ascii=False)
+    return directory
+
+
+def _patch_items_rvdata2(directory):
+    """VX Ace：重写 ``Items.rvdata2`` 补空槽位。
+
+    ⚠ 这里才是 N-30 **真正暴露**的地方：``GameData._load_icon_table`` 是
+    **无条件** ``store[oid] = _strval(...)``，``@name`` 为 nil 时存进去的是
+    空串 —— 于是空槽位真的进得了 catalog。用户那个 TOT 正是 VX Ace，
+    200 个武器槽位里 122 个是空的。
+    """
+    from core.marshal import doc_model as D
+
+    def sym(name):
+        return D.Symbol(name.encode("utf-8"))
+
+    def st(text):
+        return D.String(text.encode("utf-8"))
+
+    rows = [D.NilNode()]
+
+    def item(oid, name=None, icon=None):
+        ivars = [(sym("@id"), D.Fixnum(oid))]
+        if name is not None:
+            ivars.append((sym("@name"), st(name)))
+        if icon is not None:
+            ivars.append((sym("@icon_index"), D.Fixnum(icon)))
+        ivars.append((sym("@price"), D.Fixnum(10)))
+        rows.append(D.ObjectNode(sym("RPG::Item"), ivars))
+
+    item(1, "药草", 1)
+    item(2, "解毒草", 2)
+    for oid in PLACEHOLDER_IDS:
+        item(oid)                       # 只有 @id —— 真正的空槽位
+    item(NAMED_NO_ICON_ID, "啊啊啊啊", 0)
+    with open(os.path.join(directory, "Data", "Items.rvdata2"), "wb") as f:
+        f.write(D.dumps(D.Array(rows)))
+    return directory
+
+
 class TestItemCatalog(CheatsTestCase):
     """整表展示 + 持有标记 + 未持有可添加。"""
 
     def setUp(self):
         super(TestItemCatalog, self).setUp()
-        # 夹具：数据表里 3 件道具 / 1 把武器 / 1 件防具，身上只有道具 1
-        self.directory, self.save_path = self.opened()
+        # 夹具：数据表里 2 件道具 / 1 把武器 / 1 件防具，身上只有道具 1；
+        # 另外**故意**加了空槽位与"有名字但没图标"的条目 —— 没有这些，
+        # 占位断言就是空转的（见 PLACEHOLDER_IDS 的说明）。
+        self.directory = self.game()
+        self.inject_placeholders(self.directory)
+        self.opened_here()
+
+    @staticmethod
+    def inject_placeholders(directory):
+        return _patch_items_json(directory)
+
+    def opened_here(self):
+        res = self.call("POST", "/api/cheats/open", dir=self.directory)
+        self.assertTrue(res["ok"], res.get("error"))
+        saves = self.get("/api/cheats/saves")
+        self.assertTrue(saves["saves"], "夹具没有存档")
+        self.save_path = saves["saves"][0]["path"]
+        loaded = self.call("POST", "/api/cheats/load", path=self.save_path)
+        self.assertTrue(loaded["ok"], loaded.get("error"))
 
     def test_catalog_lists_every_database_entry(self):
         """**核心断言**：整张数据表都要出现，未持有的 count 为 0。"""
@@ -140,16 +234,91 @@ class TestItemCatalog(CheatsTestCase):
         self.assertIsInstance(row["owned"], bool)
 
     def test_missing_name_placeholder_is_hidden_when_unowned(self):
-        """数据表末尾的"占位条目"（有 id 没名字）不该列出来。
+        """数据表里的"空槽位"（有 id 没名字、也没图标）不该列出来。
 
-        列出来只会让用户以为能加一件叫 ``#35`` 的道具。真实游戏里很常见：
-        用户那个游戏的 Items.json 第 35 条就只有 id。
+        列出来只会让用户以为能加一件叫 ``#35`` 的道具。真实游戏里这不是
+        小数目：``ToT 1.16.2.2 CN1.0`` 的 200 个武器槽位里有 **122 个是空的**
+        —— 界面上超过一半是 ``#61``/``#62``… 配空白虚线框，用户报的就是
+        "图标读取的不是很对"（N-30）。
+
+        ⚠ 这条断言**以前是空转的**：夹具里没有空槽位，循环体一次都没进过，
+        所以缺陷存在时它照样绿。现在先断言"夹具里真的有"，再断言"真的被跳过"。
         """
         party = self.get("/api/cheats/party")["party"]
-        for row in party["catalog"]["items"]:
+        catalog = party["catalog"]["items"]
+        listed = {r["id"] for r in catalog}
+        # 1) 夹具必须真的包含病灶，否则这条测试没有意义
+        for oid in PLACEHOLDER_IDS:
+            with self.subTest(placeholder=oid):
+                self.assertNotIn(oid, listed,
+                                 "空槽位 #%d 被列出来了" % oid)
+        # 2) 反向确认夹具确实有这些 id（防止"夹具改了、断言跟着变空转"）
+        store = self.service().gamedata.items
+        for oid in PLACEHOLDER_IDS:
+            with self.subTest(fixture=oid):
+                self.assertIn(oid, store,
+                              "夹具里没有 id=%d 的空槽位，这条测试退化成空转了"
+                              % oid)
+        # 3) 一条占位行都不该剩下
+        for row in catalog:
             with self.subTest(row=row):
-                if row["name"].startswith("#") and not row["count"]:
-                    self.fail("未命名且未持有的占位条目被列出来了：%s" % row)
+                if row["name"].startswith("#") and not row["count"] \
+                        and not row.get("icon"):
+                    self.fail("未命名、无图标、未持有的空槽位被列出来了：%s" % row)
+
+    def test_named_entry_without_icon_is_still_listed(self):
+        """有名字就该列出来，哪怕它没有图标（真实游戏里很常见）。"""
+        rows = {r["id"]: r for r in
+                self.get("/api/cheats/party")["party"]["catalog"]["items"]}
+        self.assertIn(40, rows, "有名字但没图标的条目被当成空槽位跳过了")
+        self.assertEqual(rows[40]["name"], "啊啊啊啊")
+        self.assertEqual(rows[40]["icon"], 0)
+
+    def test_entry_with_icon_but_no_name_is_kept(self):
+        """没名字**但有图标**的条目要保留 —— 图标本身就是辨认线索。
+
+        这是"跳过空槽位"的边界：判据必须是"没名字 **且** 没图标 **且** 没持有"，
+        只看名字会把这类条目误杀。
+        """
+        directory = os.path.join(self.root, "icononly")
+        os.makedirs(directory, exist_ok=True)
+        make_mv_game(directory)
+        js_root = directory
+        path = os.path.join(js_root, "data", "Items.json")
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        payload.append({"id": 50, "iconIndex": 7})       # 只有图标，没有名字
+        payload.append({"id": 51})                       # 真正的空槽位
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        self.directory = directory
+        self.opened_here()
+        rows = {r["id"]: r for r in
+                self.get("/api/cheats/party")["party"]["catalog"]["items"]}
+        self.assertIn(50, rows, "有图标（没名字）的条目被误当成空槽位跳过了")
+        self.assertEqual(rows[50]["icon"], 7)
+        self.assertNotIn(51, rows, "真正的空槽位没被跳过")
+
+    def test_hidden_slot_count_is_reported(self):
+        """跳过多少**必须说出来** —— 不许静默隐藏（用户会以为工具漏读了）。"""
+        stats = self.get("/api/cheats/party")["party"]["catalog_stats"]["items"]
+        self.assertEqual(stats["hidden"], len(PLACEHOLDER_IDS))
+        self.assertGreater(stats["rows"], 0)
+        self.assertEqual(stats["has_icon"],
+                         sum(1 for r in self.get("/api/cheats/party")
+                             ["party"]["catalog"]["items"] if r.get("icon")))
+
+    def test_owned_placeholder_is_still_listed(self):
+        """空槽位一旦**被持有**就必须列出来（背包里的东西不能看不见）。"""
+        oid = PLACEHOLDER_IDS[0]
+        res = self.call("POST", "/api/cheats/party",
+                        items=[{"id": oid, "count": 4}])
+        self.assertTrue(res["ok"], res.get("error"))
+        rows = {r["id"]: r for r in res["party"]["catalog"]["items"]}
+        self.assertIn(oid, rows, "持有中的空槽位被跳过了")
+        self.assertEqual(rows[oid]["count"], 4)
+        self.assertEqual(res["party"]["catalog_stats"]["items"]["hidden"],
+                         len(PLACEHOLDER_IDS) - 1)
 
     def test_inventory_entry_missing_from_database_is_shown(self):
         """存档里有、数据表里没有的 id（MOD/换过数据表）也要能看见。"""
@@ -162,9 +331,18 @@ class TestItemCatalog(CheatsTestCase):
 
 
 class TestItemCatalogVXAce(TestItemCatalog):
-    """同一批断言在 VX Ace（Marshal 路径）上重跑一遍。"""
+    """同一批断言在 VX Ace（Marshal 路径）上重跑一遍。
+
+    ⚠ 这一份才是 N-30 的**主战场**：RGSS 侧的 ``GameData`` 无条件把每个条目
+    入库（``@name`` 为 nil 时存空串），所以空槽位真的会进 catalog；
+    MV 侧缺 name 字段的条目在加载阶段就被丢掉了。
+    """
 
     make_game = staticmethod(make_vxace_game)
+
+    @staticmethod
+    def inject_placeholders(directory):
+        return _patch_items_rvdata2(directory)
 
     def test_unowned_entries_have_zero_count(self):
         party = self.get("/api/cheats/party")["party"]

@@ -347,7 +347,7 @@
       "footprint": "docs/MODULES.md#coreformats",
       "vendored": true,
       "note": "vendored：来自 rpgmaker_cheating_tool/mvdata.py。 M2b 已把 JSON / 压缩 / JsonEx 元数据约定收敛到 core/formats/jsoncodec.py（与 mv_mz_data 共用一份实现）， 本文件只保留\"改哪个键、怎么改\"的业务规则。 **M3b 修复 B-02 残留**：save() 原先直接 ``open(path, 'wb')``， 写一半中断就把用户存档毁了 —— 现在走 core.safety.atomic。",
-      "lines": 319
+      "lines": 328
     },
     "core/formats/rgss_data.py": {
       "feature": "translate",
@@ -743,7 +743,7 @@
       "tested": "tests/features/cheats/test_routes.py",
       "footprint": "docs/FEATURES.md#cheats",
       "vendored": false,
-      "lines": 1056
+      "lines": 1105
     },
     "features/selfcheck/__init__.py": {
       "feature": "selfcheck",

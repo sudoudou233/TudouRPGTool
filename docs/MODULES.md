@@ -28,6 +28,7 @@
 | 道具/武器/防具前面要显示游戏内图标 | `core/iconutil.py`（图集定位+解密+切片几何）→ `features/cheats/routes.py` 的 `icon_of`/`icon_meta`/`icon_sheet` → `ui/web/pages/cheats.js` 的 `iconCell` |
 | 图标画出来了但位置不对 / 画的是别的道具 | 先查 `cell` 与 `columns`：MV/MZ **32px**、VX Ace **24px**，都是 16 列（`core/constants.py` 的 `ICON_CELLS`）；再查换游戏后 `_icon_cache` 有没有失效（N-29） |
 | 图标全是空格子 / 开关是灰的 | `icon_info` 的 `reason` 就是答案：没图集 / 解不开 / 尺寸不认识，三种都如实说明 |
+| 列表里一堆 `#编号`、图标是空白框 | 先查空槽位判定：`CheatsService.catalog()` 用的是 `_raw_name()`，**不能**用 `_name_of()`（后者从不返回空串，判定会恒假 —— N-30） |
 | 「最近打开」列表不对（空的 / 有失效项 / 想清掉） | `core/recent.py`（MRU 存储）+ `ui/routes.py` 的四个端点 + `ui/web/app.js` 的 `renderRecent` |
 | 点了「最近打开」没反应 | 当前页面模块没导出 `openGame(path)`；用 `test_web_syntax.py::TestShellRecentDropdown` 定位 |
 | 界面样式不统一 | `ui/web/tokens.css` + `components.css` + `docs/UI_SPEC.md` |

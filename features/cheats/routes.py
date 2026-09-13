@@ -69,18 +69,32 @@ PAID_FOR = "写回原存档前自动备份到游戏目录下的「汉化备份_*
 
 
 def _name_of(raw, key):
-    """从名字表的一项取显示名；取不到回退 ``#key``。
+    """从名字表的一项取**显示名**；取不到回退 ``#key``。
 
     支持两种形态：纯字符串（道具/武器/防具/职业），以及
     ``{'name': ..., 'class_id': ...}``（角色 —— 附带职业与初始等级）。
+
+    ⚠ 这个函数**从不返回空串**（这是有意的：界面上总得显示点什么）。
+    因此**不能**用它来判断"这条是不是空槽位" —— 那个判断必须用
+    :func:`_raw_name`。N-30 就是踩了这个：见 :meth:`CheatsService.catalog`。
     """
-    if isinstance(raw, str) and raw:
+    return _raw_name(raw) or "#%d" % key
+
+
+def _raw_name(raw):
+    """从名字表的一项取**真实名字**；没有就返回 ``''``（不编造 ``#id``）。
+
+    与 :func:`_name_of` 的分工：`_name_of` 负责"界面上显示什么"，
+    `_raw_name` 负责"这条到底有没有名字"。数据表末尾的空槽位（有 id、
+    没名字、通常也没有图标）必须靠后者才能识别出来。
+    """
+    if isinstance(raw, str):
         return raw
     if isinstance(raw, dict):
         name = raw.get("name")
-        if isinstance(name, str) and name:
+        if isinstance(name, str):
             return name
-    return "#%d" % key
+    return ""
 
 
 class BackupPolicy(object):
@@ -368,17 +382,42 @@ class CheatsService(object):
             out.append({"id": key, "name": _name_of(store.get(key), key)})
         return out
 
-    def catalog(self, kind, bucket):
+    def catalog(self, kind, bucket, stats=None):
         """**整份**道具/武器/防具表 + 持有数 —— 与参考工具一致的行为。
 
         ⚠ 为什么必须给全表（用户报告"只读出了人物身上自带有的道具"）：
         参考工具 ``main.py:294-305`` 的 ``_refresh_inv`` 是**遍历整张数据表**
         并显示 ``counts.get(oid, 0)`` —— 也就是"表里每一件都在，没持有的显示 0"。
         这样用户才能**添加自己还没有的道具**（改档的主要用途之一）。
-        我们之前只列 ``party['_items']`` 里已有的键，于是"未持有的一律看不见"，
+        我们之前只列 ``party['_items']`` 里的键，于是"未持有的一律看不见"，
         功能比参考工具窄。
 
-        返回 ``[{id, name, count, owned}]``，按 id 升序。
+        ⚠⚠ **N-30（用户报告"tot 的武器防具图标读取不对"）**：
+        "跳过空槽位"这件事以前**写了但从来没生效**。原判定是::
+
+            name = _name_of(store.get(raw_id), item_id)
+            if not name and not count:
+                continue
+
+        而 :func:`_name_of` **从不返回空串**（取不到就回退 ``#id``），
+        所以 `not name` 恒为假 —— 数据表里的空槽位一条都没被跳过。
+
+        这在真实游戏里不是小数目（实测）：
+        ``ToT 1.16.2.2 CN1.0`` 的 200 个武器槽位里有 **122 个是空的**、
+        200 个防具槽位里 111 个是空的 —— 界面上超过一半是 ``#61``/``#62``…
+        配一个空白虚线框，用户看到的就是"**图标读得不对 / 读不出来**"。
+
+        现在改用 :func:`_raw_name` 判断"到底有没有名字"，并同时看**有没有图标**：
+
+        * 有名字 → 列出（真条目）；
+        * 没名字**但有图标** → 也列出（图标本身就是线索，用户靠它辨认）；
+        * 没名字、没图标、也没持有 → **这才是空槽位**，跳过；
+        * 占位但**持有中** → 仍然列出（否则用户"背包里的东西在界面上看不见"）。
+
+        跳过的数量通过 ``stats['hidden']`` 回传，界面显示出来 ——
+        **不静默隐藏**（本项目的一贯要求）。
+
+        返回 ``[{id, name, count, owned, icon}]``，按 id 升序。
         """
         save = self.require_save()
         store = {}
@@ -387,6 +426,7 @@ class CheatsService(object):
         counts = dict(bucket or {})
         rows = []
         seen = set()
+        hidden = 0
         for raw_id in store:
             try:
                 item_id = int(raw_id)
@@ -394,33 +434,36 @@ class CheatsService(object):
                 continue
             if item_id <= 0:
                 continue
-            name = _name_of(store.get(raw_id), item_id)
+            raw_name = _raw_name(store.get(raw_id)).strip()
+            icon = self.icon_of(kind, item_id)
             count = counts.get(item_id, 0)
-            # 数据表末尾常有"占位条目"（有 id 没名字，例如 Items.json 里
-            # 最后一条只有 id）。列出来只会让用户以为能加一件叫 #35 的道具，
-            # 但**持有中的**占位条目仍要显示（见下面 orphan 分支）。
-            if not name and not count:
+            if not raw_name and not icon and not count:
+                hidden += 1
                 continue
             seen.add(item_id)
             rows.append({
                 "id": item_id,
-                "name": name or "#%d" % item_id,
+                "name": raw_name or "#%d" % item_id,
                 "count": count,
                 "owned": bool(count),
-                "icon": self.icon_of(kind, item_id),
+                "icon": icon,
             })
         # 存档里有、但数据表里没有的 id（MOD / 数据表被换过）也要列出来，
         # 否则用户会在界面上"看不到自己背包里的东西"
         for item_id, count in counts.items():
             if item_id is None or item_id in seen:
                 continue
-            name = _name_of(store.get(item_id), item_id) if item_id in store else ""
-            rows.append({"id": item_id, "name": name or "#%d" % item_id,
+            raw_name = _raw_name(store.get(item_id)) if item_id in store else ""
+            rows.append({"id": item_id,
+                         "name": raw_name.strip() or "#%d" % item_id,
                          "count": count, "owned": bool(count),
                          "orphan": item_id not in store,
                          "icon": self.icon_of(kind, item_id) if item_id in store
                          else None})
         rows.sort(key=lambda r: (r["id"] is None, r["id"]))
+        if stats is not None:
+            stats.update(rows=len(rows), hidden=hidden,
+                         has_icon=sum(1 for r in rows if r.get("icon")))
         _ = save
         return rows
 
@@ -430,6 +473,9 @@ class CheatsService(object):
         ``items`` 是"当前持有"（只含数量 > 0 的条目，用于快速核对）；
         ``catalog`` 是"整张表"（含数量 0 的条目，用于添加新道具）。
         界面默认显示 catalog —— 与参考工具一致。
+
+        ``catalog_stats[kind]`` 给出 ``{rows, hidden, has_icon}`` ——
+        ``hidden`` 是被跳过的空槽位数，界面要**显示出来**（N-30：不静默隐藏）。
         """
         save = self.require_save()
         party = save.read_party() or {}
@@ -441,6 +487,7 @@ class CheatsService(object):
             "currency": getattr(self.gamedata, "currency", "") if self.gamedata else "",
             "items": {},
             "catalog": {},
+            "catalog_stats": {},
         }
         for kind in EDIT_KINDS:
             bucket = party.get(kind) or {}
@@ -457,7 +504,9 @@ class CheatsService(object):
                 rows.append({"id": item_id, "name": name or "#%d" % item_id,
                              "count": count, "icon": self.icon_of(kind, item_id)})
             view["items"][kind] = rows
-            view["catalog"][kind] = self.catalog(kind, bucket)
+            stats = {}
+            view["catalog"][kind] = self.catalog(kind, bucket, stats=stats)
+            view["catalog_stats"][kind] = stats
         return view
 
     def actors_view(self):
