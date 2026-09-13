@@ -328,7 +328,7 @@
       "footprint": "docs/MODULES.md#coreformats",
       "vendored": true,
       "note": "vendored：来自 rpgmaker_translation_tool/tool/mv_mz.py。 M2b 已把 JSON / 压缩 / 加密包装的**共同约定**收敛到 core/formats/jsoncodec.py，本文件只保留\"提取哪些字段、 改哪个键\"这类业务规则。 B-02 修复：写回走 core.safety.atomic（jsoncodec 转发的原子写）。",
-      "lines": 450
+      "lines": 455
     },
     "core/formats/mv_save.py": {
       "feature": "cheats",
@@ -566,7 +566,7 @@
       "tested": "tests/compat/test_build_backup.py, tests/compat/test_m2a_regressions.py",
       "footprint": "docs/MODULES.md#coresafety",
       "vendored": false,
-      "lines": 662
+      "lines": 703
     },
     "core/safety/fontutil.py": {
       "feature": "translate",
@@ -847,6 +847,23 @@
       "footprint": "docs/DEVLOG.md",
       "vendored": false,
       "lines": 588
+    },
+    "tools/fix_session_paths.py": {
+      "feature": "none",
+      "layer": "tools",
+      "public": [
+        "main",
+        "fix_path",
+        "migrate_session",
+        "session_files"
+      ],
+      "depends": [
+        "core.paths"
+      ],
+      "tested": "(一次性脚本；其修法由 tests/features/translate/",
+      "footprint": "docs/STATE.md",
+      "vendored": false,
+      "lines": 152
     },
     "tools/gen_footprint.py": {
       "feature": "none",

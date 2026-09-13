@@ -84,10 +84,17 @@ def copy_tree(src, dst, progress_cb=None, ignore=None):
 
     ``progress_cb(done, total, message=None)`` —— 与原实现 ``_copy_tree`` 的
     ``progress_cb(done, total)`` 兼容（第三个参数可选）。
+
+    **跨盘**（输出目录与原游戏不在同一个盘）时自动退化为
+    :func:`shutil.copyfile` + 手动保留时间戳：``shutil.copy2`` 会尝试复制
+    权限/ADS 等元数据，跨盘在 Windows 上可能抛
+    ``The system cannot copy files to a different disk drive``。
+    内容本身是一致的，只少了与游戏运行无关的元数据。
     """
     src = os.path.abspath(src)
     dst = os.path.abspath(dst)
     ignore = set(ignore or ())
+    cross_drive = _drive_of(src) != _drive_of(dst)
 
     def _ignored(name):
         return name in ignore or name.startswith(backup_mod.BACKUP_PREFIX)
@@ -106,14 +113,34 @@ def copy_tree(src, dst, progress_cb=None, ignore=None):
         for name in files:
             if _ignored(name):
                 continue
-            shutil.copy2(os.path.join(root, name), os.path.join(target, name))
+            source = os.path.join(root, name)
+            dest = os.path.join(target, name)
+            if cross_drive:
+                shutil.copyfile(source, dest)
+                _copy_times(source, dest)
+            else:
+                shutil.copy2(source, dest)
             done += 1
             if progress_cb:
                 try:
                     progress_cb(done, total, "复制 %s" % name)
                 except TypeError:
                     progress_cb(done, total)
-    return {"files": done}
+    return {"files": done, "cross_drive": cross_drive}
+
+
+def _drive_of(path):
+    """返回盘符（Windows）或 ``/``（POSIX）。"""
+    return os.path.splitdrive(os.path.abspath(path))[0].lower()
+
+
+def _copy_times(src, dst):
+    """尽力保留时间戳；失败不影响复制结果。"""
+    try:
+        stat = os.stat(src)
+        os.utime(dst, (stat.st_atime, stat.st_mtime))
+    except OSError:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -513,9 +540,20 @@ def _build_copy(session, info, game_dir, rel_data, engine, entries_by_file,
     dst = resolve_target_dir(game_dir, target_dir)
     if os.path.abspath(dst) == game_dir:
         raise ValueError("输出目录不能与原游戏目录相同")
-    rel = os.path.relpath(dst, game_dir)
-    if rel == "." or not rel.startswith(".."):
-        raise ValueError("输出目录不能位于游戏目录内部: %s" % dst)
+
+    # ⚠ 跨盘：``os.path.relpath`` 在不同盘符之间会抛 ValueError（实测踩到：
+    # 游戏在 D:、输出目录留成了 C:\Temp，用户看到的是英文栈
+    # "path is on mount 'C:', start on mount 'D:'"）。
+    #
+    # 跨盘本身是**允许**的，只是要跳过年基于相对路径的两项检查：
+    # * "输出在游戏目录内部" —— 不同盘必然不成立；
+    # * "先移开旧目录再换名" —— 那两次 ``os.replace`` 都在**目标盘**内进行
+    #   （暂存目录就建在目标目录旁边），因此仍然成立、仍然原子。
+    cross_drive = _drive_of(dst) != _drive_of(game_dir)
+    if not cross_drive:
+        rel = os.path.relpath(dst, game_dir)
+        if rel == "." or not rel.startswith(".."):
+            raise ValueError("输出目录不能位于游戏目录内部: %s" % dst)
     assert_safe_target(dst)
 
     dst_exists = os.path.isdir(dst)
@@ -550,6 +588,9 @@ def _build_copy(session, info, game_dir, rel_data, engine, entries_by_file,
         # 而结果里**看不出复制范围**，所以没人发现。现在这句话直接出现在界面上。
         notes.append("已复制游戏目录：%s（共 %d 个文件）"
                      % (game_dir, copied.get("files", 0)))
+        if copied.get("cross_drive"):
+            notes.append("输出目录与原游戏不在同一个盘：已按「复制内容 + 保留时间戳」"
+                         "的方式处理，游戏内容一致。")
         if not os.path.isfile(os.path.join(staging, "Game.exe")):
             notes.append("提示：这个游戏目录里没有 Game.exe。"
                          "若副本无法启动，请确认你选的是**最外层**的游戏目录"

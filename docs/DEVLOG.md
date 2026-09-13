@@ -5,6 +5,108 @@
 
 ---
 
+## 2026-09-13 ｜ **用户报告**「对话文本没有被翻译到」：地图事件路径缺 `list` 层（54.86% 丢失）
+
+### 现象
+
+用户在做 `RJ295122 / フェラ怪人アミリンVer.3.1`（MV，老版 www 布局）。
+会话里 **45,037 条全部标记为已翻译**，但生成的汉化版里**对话还是日文**。
+
+### 排查过程
+
+1. 读会话文件：45,037 条、状态全是 `translated`、对话 39,934 条 —— **数据没问题**。
+2. 查游戏目录：`data/*.json` 修改时间还是 09-12，同级目录**没有汉化版** —— 说明写回没生效（或没构建过）。
+3. 抽会话里的 path 去真实数据上定位：`Actors/Items/CommonEvents` 全部 OK，
+   但 `Map001.json` 的 `events/2/pages/0/1/parameters/0` 抛 `KeyError: 1`。
+4. **全量测一遍**：45,037 条里 **24,709 条定位失败 = 54.86%**，全部是地图事件对话。
+
+### 根因
+
+`mv_mz_data.extract` 给**地图事件**拼路径时漏了 `list` 这一层：
+
+```python
+_walk_event_list(entries, fname, pg.get("list"),
+                 "events/%d/pages/%d" % (ev_i, pg_i), ...)   # ← 缺 /list
+```
+
+而 `_walk_event_list` 内部拼的是 `"%s/%d/parameters/%d"`（下标是**指令在 list
+里的位置**）。于是产出的路径是 `events/2/pages/0/1/parameters/0`，而真实结构是
+`events/2/pages/0/list/1/parameters/0` —— 写回时在 dict 上取键 `"1"` 失败，
+`KeyError` 被上层 `except` 吞掉，**整张地图的事件对话静默丢失**。
+
+**与 N-15 完全同一形态**，而且更阴险：`CommonEvents` 那条路径是**对的**
+（`"%d/list"`），只有地图事件漏了 —— "两条相似路径只改了一条"是最容易残留的
+缺陷形态。上一轮修 N-15 时我改了 `CommonEvents` 的调用点，漏掉了它旁边的
+地图调用点。
+
+### 修法
+
+1. `mv_mz_data.extract`：地图事件的路径前缀补上 `/list`。
+2. `tools/fix_session_paths.py`（新，一次性工具）：**就地修已扫过的会话**。
+   用户已经翻完 45,037 条，重扫会丢掉进度；这个脚本按正则把
+   `events/<n>/pages/<m>/<剩余>` 改写成 `events/<n>/pages/<m>/list/<剩余>`，
+   并按新 key 重新归位（字典 key 就是 `file|path`，不重算会撞键）。
+   幂等、干跑默认、`--apply` 才写盘且先备份。
+3. **N-26（顺带发现）**：游戏在 D:、输出目录留成 `C:\Temp` 时，
+   `os.path.relpath` 抛英文栈 `path is on mount 'C:', start on mount 'D:'`。
+   跨盘其实**可以支持**（暂存目录建在目标盘旁边，两次 `os.replace` 仍在同盘内、
+   依旧原子），于是：跳过"输出在游戏目录内部"的相对路径检查，
+   `copy_tree` 跨盘时改走 `copyfile` + 手动保留时间戳，并在结果里说明。
+4. `tests/features/translate/test_path_and_output_regressions.py`（新，8 例）。
+
+### 怎么验证
+
+**守卫有效性**（把缺 `list` 的写法放回去）：测试立刻报出与用户描述一致的失败：
+
+```text
+AssertionError: 'pages/0/1/' unexpectedly found in
+  'events/1/pages/0/1/parameters/0' : 地图事件路径缺少 list 层
+AssertionError: 路径定位到的不是原文（写回会写错位置或丢失）
+```
+
+还原后 8 例全过。
+
+**用户会话实测**（就地修复后）：
+
+```text
+会话条目  : 45037
+可定位    : 45037 (100.00%)      ← 修复前是 45.14%
+不可定位  : 0 (0.00%)
+```
+
+**端到端写副本实测**（用用户那份 45,037 条的会话）：
+
+```text
+写回条目 : 45037 / 文件 164
+复制文件 : 8229
+副本根   : Game.exe, credits.html, d3dcompiler_47.dll, ffmpeg.dll …
+副本里的对话（应当已是中文）:
+   Map001.json  events/2/pages/0/list/1/parameters/0  '早上好！\|\\|\^'   OK
+   Map001.json  events/2/pages/0/list/5/parameters/0  '体内寄生虫：…\c[10]\V[15]'  OK
+   Map001.json  events/7/pages/0/list/1/parameters/0  '啊啊啊啊」'   OK
+原游戏 Map001.json 修改时间: 09-12 23:29:17（未被改动）
+```
+
+```powershell
+python tests/run_all.py                 # 904 例（原 896 + 8），退出码 0
+python tools/check_footprint.py         # 44 文件 / 3 功能，0 错误
+```
+
+### 教训（第三次同一形态）
+
+| 缺陷 | 表现 | 为什么没被测出来 |
+| --- | --- | --- |
+| N-15 | MV 事件对话写不进汉化版 | 夹具只断言"扫描出来了"，没断言"写进去了" |
+| N-24 | 副本缺 `Game.exe` | 夹具的 `game_dir` 恰好等于 `js_root` |
+| **N-25** | **地图事件对话全丢** | **夹具的地图事件恰好也能被写回；而且我只改了两条相似路径中的一条** |
+
+共同点：**"两条相似路径/两个相似概念只改了一个"**，以及**断言停在"扫描成功"
+而不是"写回成功"**。N-25 现在由一条**全量**断言守住：
+"提取到的每一条路径都必须能在同一份数据里定位到原文" ——
+这条断言与"哪个文件、哪种事件、哪一层结构"无关，因此不会再有"漏改一处"的盲区。
+
+---
+
 ## 2026-09-13 ｜ 修复"汉化版副本只有 www、没有 Game.exe"（用户报告）
 
 ### 现象

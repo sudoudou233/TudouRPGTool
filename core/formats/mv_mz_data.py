@@ -314,8 +314,13 @@ def extract(data_dir, opts):
                 for pg_i, pg in enumerate(ev.get("pages") or []):
                     if not isinstance(pg, dict):
                         continue
+                    # ⚠ 路径必须带上 ``list`` 这一层：``_walk_event_list`` 内部拼的是
+                    # ``"%s/%d/parameters/%d"``（下标是**指令在 list 里的位置**），
+                    # 因此这里的前缀要以 ``/list`` 结尾。漏掉的表现和 N-15 一样：
+                    # 扫描/界面全都正常，写回时定位失败 → **整张地图的对话静默丢失**
+                    # （实测某游戏 45,037 条里丢了 24,709 条 = 54.86%）。
                     _walk_event_list(entries, fname, pg.get("list"),
-                                     "events/%d/pages/%d" % (ev_i, pg_i),
+                                     "events/%d/pages/%d/list" % (ev_i, pg_i),
                                      "地图 %s 事件 %d" % (map_id, ev_i + 1),
                                      opts.include_comments)
         elif fname == "CommonEvents.json":
