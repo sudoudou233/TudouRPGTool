@@ -302,8 +302,66 @@ class CheatsService(object):
             out.append({"id": key, "name": _name_of(store.get(key), key)})
         return out
 
+    def catalog(self, kind, bucket):
+        """**整份**道具/武器/防具表 + 持有数 —— 与参考工具一致的行为。
+
+        ⚠ 为什么必须给全表（用户报告"只读出了人物身上自带有的道具"）：
+        参考工具 ``main.py:294-305`` 的 ``_refresh_inv`` 是**遍历整张数据表**
+        并显示 ``counts.get(oid, 0)`` —— 也就是"表里每一件都在，没持有的显示 0"。
+        这样用户才能**添加自己还没有的道具**（改档的主要用途之一）。
+        我们之前只列 ``party['_items']`` 里已有的键，于是"未持有的一律看不见"，
+        功能比参考工具窄。
+
+        返回 ``[{id, name, count, owned}]``，按 id 升序。
+        """
+        save = self.require_save()
+        store = {}
+        if self.gamedata is not None:
+            store = getattr(self.gamedata, kind, None) or {}
+        counts = dict(bucket or {})
+        rows = []
+        seen = set()
+        for raw_id in store:
+            try:
+                item_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if item_id <= 0:
+                continue
+            name = _name_of(store.get(raw_id), item_id)
+            count = counts.get(item_id, 0)
+            # 数据表末尾常有"占位条目"（有 id 没名字，例如 Items.json 里
+            # 最后一条只有 id）。列出来只会让用户以为能加一件叫 #35 的道具，
+            # 但**持有中的**占位条目仍要显示（见下面 orphan 分支）。
+            if not name and not count:
+                continue
+            seen.add(item_id)
+            rows.append({
+                "id": item_id,
+                "name": name or "#%d" % item_id,
+                "count": count,
+                "owned": bool(count),
+            })
+        # 存档里有、但数据表里没有的 id（MOD / 数据表被换过）也要列出来，
+        # 否则用户会在界面上"看不到自己背包里的东西"
+        for item_id, count in counts.items():
+            if item_id is None or item_id in seen:
+                continue
+            name = _name_of(store.get(item_id), item_id) if item_id in store else ""
+            rows.append({"id": item_id, "name": name or "#%d" % item_id,
+                         "count": count, "owned": bool(count),
+                         "orphan": item_id not in store})
+        rows.sort(key=lambda r: (r["id"] is None, r["id"]))
+        _ = save
+        return rows
+
     def party_view(self):
-        """队伍 / 金币 / 步数 / 三个道具桶（带可读名字）。"""
+        """队伍 / 金币 / 步数 / 三个道具桶 + **完整道具表**（带可读名字）。
+
+        ``items`` 是"当前持有"（只含数量 > 0 的条目，用于快速核对）；
+        ``catalog`` 是"整张表"（含数量 0 的条目，用于添加新道具）。
+        界面默认显示 catalog —— 与参考工具一致。
+        """
         save = self.require_save()
         party = save.read_party() or {}
         view = {
@@ -313,6 +371,7 @@ class CheatsService(object):
             "party_ids": list(party.get("party_ids") or []),
             "currency": getattr(self.gamedata, "currency", "") if self.gamedata else "",
             "items": {},
+            "catalog": {},
         }
         for kind in EDIT_KINDS:
             bucket = party.get(kind) or {}
@@ -329,6 +388,7 @@ class CheatsService(object):
                 rows.append({"id": item_id, "name": name or "#%d" % item_id,
                              "count": count})
             view["items"][kind] = rows
+            view["catalog"][kind] = self.catalog(kind, bucket)
         return view
 
     def actors_view(self):

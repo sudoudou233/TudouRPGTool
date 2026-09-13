@@ -420,53 +420,95 @@ function renderParty(party) {
   }
 
   const kinds = state.itemKinds.length ? state.itemKinds
-    : Object.keys(party.items || {});
+    : Object.keys(party.catalog || party.items || {});
   for (const kind of kinds) {
-    const rows = (party.items || {})[kind] || [];
-    const label = { items: '道具', weapons: '武器', armors: '防具' }[kind] || kind;
+    const label = { items: '道具', weapons: '武器', armor: '防具',
+                    armors: '防具' }[kind] || kind;
+    const catalog = (party.catalog || {})[kind] || [];
+    // 兼容：后端没给 catalog 时退回"只列持有"（旧行为）
+    const rows = catalog.length ? catalog : ((party.items || {})[kind] || []);
+
+    /* 与参考工具一致：**列出整张数据表**（没持有的显示 0），
+       这样才可能添加自己还没有的道具。上面再加搜索与"只看持有"两个开关 ——
+       35 件还好，几百件时没有筛子就没法用。 */
+    const search = el('input', { type: 'text', placeholder: '搜索名称或 id' });
+    const onlyOwned = el('input', { type: 'checkbox' });
+    const filterRow = el('div', { class: 'row' });
     const tbody = el('tbody', {});
-    if (!rows.length) {
-      tbody.append(el('tr', {}, [
-        el('td', { class: 'hint', colspan: '3', text: '（空）' }),
-      ]));
-    }
-    for (const row of rows) {
-      const input = el('input', { type: 'number', value: String(row.count), min: '0' });
-      input.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter') applyParty({ [kind]: [{ id: row.id, count: input.value }] });
-      });
-      tbody.append(el('tr', {}, [
-        el('td', {}, [
-          el('div', { text: row.name }),
-          el('div', { class: 'hint mono', text: `#${row.id}` }),
-        ]),
-        el('td', {}, [input]),
-        el('td', {}, [el('button', {
-          class: 'btn sm', type: 'button', text: '应用',
-          onclick: () => applyParty({ [kind]: [{ id: row.id, count: input.value }] }),
-        })]),
-      ]));
-    }
+    const counter = el('span', { class: 'hint' });
+
+    const draw = () => {
+      const query = search.value.trim().toLowerCase();
+      const owned = onlyOwned.checked;
+      tbody.textContent = '';
+      let shown = 0;
+      for (const row of rows) {
+        if (owned && !row.count) continue;
+        if (query
+            && !String(row.name).toLowerCase().includes(query)
+            && !String(row.id).includes(query)) {
+          continue;
+        }
+        shown += 1;
+        const input = el('input', { type: 'number', value: String(row.count), min: '0' });
+        input.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter') applyParty({ [kind]: [{ id: row.id, count: input.value }] });
+        });
+        tbody.append(el('tr', {}, [
+          el('td', {}, [
+            el('div', { text: row.name }),
+            el('div', { class: 'hint mono', text: `#${row.id}` }),
+          ]),
+          el('td', {}, [input]),
+          el('td', {}, [el('span', {
+            class: 'tag ' + (row.count ? 'translated' : 'skipped'),
+            text: row.count ? '持有' : '未持有',
+          })]),
+          el('td', {}, [el('button', {
+            class: 'btn sm', type: 'button', text: '应用',
+            onclick: () => applyParty({ [kind]: [{ id: row.id, count: input.value }] }),
+          })]),
+        ]));
+      }
+      if (!shown) {
+        tbody.append(el('tr', {}, [
+          el('td', { class: 'hint', colspan: '4', text: '没有符合条件的条目' }),
+        ]));
+      }
+      counter.textContent = `显示 ${shown} / ${rows.length} 项`;
+    };
+    search.addEventListener('input', draw);
+    onlyOwned.addEventListener('change', draw);
+    filterRow.append(search,
+      el('label', { class: 'check' }, [onlyOwned, document.createTextNode('只看已持有')]),
+      counter);
+
     const addInput = el('input', { type: 'number', placeholder: '数量', value: '1' });
     const addId = el('input', { type: 'number', placeholder: '物品 id' });
     host.append(el('hr', { class: 'divider' }));
     host.append(el('div', { class: 'row' }, [
       el('b', { text: label }),
-      el('span', { class: 'hint', text: '新增/修改：' }),
-      addId, addInput,
-      el('button', {
-        class: 'btn sm', type: 'button', text: '新增/设置',
-        onclick: () => applyParty({ [kind]: [{ id: addId.value, count: addInput.value }] }),
-      }),
+      el('span', { class: 'hint', text: `${rows.length} 项（含未持有）` }),
     ]));
+    host.append(filterRow);
     host.append(el('div', { class: 'table-wrap' }, [
       el('table', {}, [
         el('thead', {}, [el('tr', {}, [
-          el('th', { text: '名称' }), el('th', { text: '数量' }), el('th', { text: '操作' }),
+          el('th', { text: '名称' }), el('th', { text: '数量' }),
+          el('th', { text: '状态' }), el('th', { text: '操作' }),
         ])]),
         tbody,
       ]),
     ]));
+    host.append(el('div', { class: 'row' }, [
+      el('span', { class: 'hint', text: '直接按 id 设置：' }),
+      addId, addInput,
+      el('button', {
+        class: 'btn sm', type: 'button', text: '设置数量',
+        onclick: () => applyParty({ [kind]: [{ id: addId.value, count: addInput.value }] }),
+      }),
+    ]));
+    draw();
   }
 }
 
