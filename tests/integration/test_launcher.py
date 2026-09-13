@@ -230,5 +230,74 @@ class TestEntryMatchesDocs(unittest.TestCase):
                 self.assertIn(engine, text)
 
 
+def github_slug(heading):
+    """按 GitHub 的规则把标题转成锚点。
+
+    规则（实测归纳）：转小写 → 去掉**字母数字与 -_ 之外**的标点（中文标题里的
+    `、`/`（）`/`：` 都会被丢掉）→ 空格转连字符。
+    CJK 属于字母，会保留，所以 `## 一、怎么启动` 的锚点是 `#一怎么启动`。
+    """
+    out = []
+    for ch in heading.strip().lower():
+        if ch.isalnum() or ch in "-_":
+            out.append(ch)
+        elif ch == " ":
+            out.append("-")
+    return "".join(out)
+
+
+class TestReadmeIsPublishable(unittest.TestCase):
+    """README 要能直接发到 GitHub —— 死链与坏锚点是发布后才发现的那种问题。"""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(README, encoding="utf-8") as f:
+            cls.text = f.read()
+        cls.links = re.findall(r"\[[^\]]*\]\(([^)]+)\)", cls.text)
+        #: 去重后的相对链接（GitHub 上的仓库内跳转）
+        cls.relative = sorted({t for t in cls.links
+                               if not t.startswith(("http://", "https://", "#"))})
+        cls.anchors = sorted({t[1:] for t in cls.links if t.startswith("#")})
+        #: 标题里可能带行内代码/加粗，锚点按纯文本算
+        cls.headings = []
+        for line in cls.text.splitlines():
+            if line.startswith("#"):
+                title = line.lstrip("#").strip()
+                title = re.sub(r"[`*]", "", title)
+                cls.headings.append(title)
+
+    def test_every_relative_link_resolves(self):
+        """仓库内链接指向的文件必须真的存在（否则 GitHub 上是死链）。"""
+        missing = [t for t in self.relative
+                   if not os.path.exists(os.path.join(_ROOT, t.split("#")[0]))]
+        self.assertEqual(missing, [], "README 里的这些链接指向了不存在的文件：%s"
+                         % missing)
+        self.assertGreaterEqual(len(self.relative), 8,
+                                "相对链接太少，检查逻辑可能失效了：%s" % self.relative)
+
+    def test_every_anchor_matches_a_heading(self):
+        """目录里的每个锚点都要对得上一个真实标题。"""
+        slugs = {github_slug(h) for h in self.headings}
+        bad = [a for a in self.anchors if a not in slugs]
+        self.assertEqual(bad, [], "README 目录里的锚点找不到对应标题：%s\n"
+                         "现有标题锚点：%s" % (bad, sorted(slugs)))
+        self.assertGreaterEqual(len(self.anchors), 8, "目录锚点太少，检查逻辑可能失效")
+
+    def test_states_the_license(self):
+        """没有许可证的仓库默认"保留所有权利" —— 发布前必须有。"""
+        self.assertIn("MIT", self.text)
+        self.assertTrue(os.path.isfile(os.path.join(_ROOT, "LICENSE")),
+                        "README 说了 MIT，但仓库里没有 LICENSE 文件")
+
+    def test_has_a_disclaimer(self):
+        """涉及改存档与汉化，必须写清责任边界。"""
+        self.assertIn("免责声明", self.text)
+        self.assertIn("无任何关联", self.text)
+
+    def test_has_english_intro(self):
+        """外国访客要能一眼看懂这是什么。"""
+        self.assertIn("**English**", self.text)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
