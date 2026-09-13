@@ -205,13 +205,25 @@ A：默认只写副本；覆盖前自动备份；写盘走原子替换；全部�
 python tests/run_all.py              # 全部测试（退出码 0 = 通过）
 python tests/run_all.py --list       # 看各层用例数
 python tests/run_all.py --suite unit # 只跑某一层
-python tools/check_footprint.py      # 足迹校验（46 个源文件 / 3 个功能）
+python tools/check_footprint.py      # 足迹校验（47 个源文件 / 3 个功能）
 python tools/gen_footprint.py        # 源码变动后刷新 docs/footprint.json
+python tools/check_secrets.py        # 发布前：扫 git 历史里有没有泄漏 API Key
 
 # 真实游戏样本（不入库；用环境变量指向本机游戏库）
 $env:TUDOU_RPGTOOL_SAMPLES = 'D:\gamess'
 python tests/run_all.py
 ```
+
+### 配置
+
+复制 **`config.example.json`** 为 `config.json` 再填自己的值。**`config.json` 已在
+`.gitignore` 里 —— 不要提交它**（里面有你的 API Key）。什么都不填也能跑：
+Google 翻译不需要密钥，本地 Ollama 通常也不需要。
+
+> ⚠ 只加 `.gitignore` **挡不住已经提交过的东西**：key 一旦进过提交，就永久留在
+> git 对象里，`git push` 会把整个历史一起推上去（本地 `git status` 干干净净也没用）。
+> 发布前跑一次 `python tools/check_secrets.py` —— 它扫的是**所有提交里的所有 blob**，
+> 并且会把本机 `config.json` 里的真实 key 拿去历史里精确匹配。
 
 | 测试层 | 用例数 | 说明 |
 | --- | --- | --- |

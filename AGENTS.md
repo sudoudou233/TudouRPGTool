@@ -123,6 +123,10 @@ python tools/gen_footprint.py --check   # 只比较不写盘
 # 真实样本测试（样本不入库；用环境变量指向本机游戏库）
 $env:TUDOU_RPGTOOL_SAMPLES = 'D:\gamess'
 python tests/run_all.py --suite compat
+
+# 发布前密钥扫描（**扫 git 历史，不只是工作区**；有发现则退出码 1）
+python tools/check_secrets.py
+python tools/check_secrets.py --worktree   # 只看"会被提交的文件"，快
 ```
 
 ### 环境变量
@@ -149,6 +153,10 @@ python tests/run_all.py --suite compat
    python tests/run_all.py
    python tools/gen_footprint.py      # 有新文件/新功能时必须
    python tools/check_footprint.py
+   ```
+   **要发布 / 要 push 之前再加一条**（它扫的是 git **历史**，不只是工作区）：
+   ```powershell
+   python tools/check_secrets.py
    ```
 4. 更新 `docs/STATE.md`（状态快照）与 `docs/DEVLOG.md`（追加式时间线）
 5. 架构/决策有变 → 更新 `docs/ARCHITECTURE.md` / `docs/DECISIONS.md`

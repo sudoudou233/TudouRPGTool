@@ -1,0 +1,23 @@
+{
+  "_说明": [
+    "这是配置样例 —— 把它复制成 config.json 再填你自己的值。",
+    "config.json 已在 .gitignore 里，**不要**提交它（里面有你的 API Key）。",
+    "所有字段都可以不填，缺的会用默认值（见 core/config.py 的 DEFAULTS）。",
+    "api_key 留空也能用：Google 翻译不需要密钥；本地 Ollama 通常也不需要。"
+  ],
+
+  "engine": "openai",
+  "base_url": "https://api.deepseek.com",
+  "api_key": "",
+  "model": "deepseek-v4-flash",
+
+  "src_lang": "auto",
+  "dst_lang": "zh-CN",
+
+  "workers": 8,
+  "batch_size": 40,
+
+  "last_game_dir": "",
+  "last_output_dir": "",
+  "font_path": ""
+}

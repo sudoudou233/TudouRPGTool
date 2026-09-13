@@ -888,6 +888,24 @@
       "vendored": false,
       "lines": 588
     },
+    "tools/check_secrets.py": {
+      "feature": "none",
+      "layer": "tools",
+      "public": [
+        "scan_text",
+        "scan_history",
+        "scan_local_config",
+        "Finding",
+        "main"
+      ],
+      "depends": [
+        "(stdlib only)"
+      ],
+      "tested": "tests/unit/test_check_secrets.py",
+      "footprint": "docs/MODULES.md#toolscheck_secrets",
+      "vendored": false,
+      "lines": 340
+    },
     "tools/fix_session_paths.py": {
       "feature": "none",
       "layer": "tools",

@@ -34,6 +34,7 @@
 | 界面样式不统一 | `ui/web/tokens.css` + `components.css` + `docs/UI_SPEC.md` |
 | 新增一个页面 | `features/<name>/manifest.py` 里加 `pages` 一条 + 新建 `ui/web/pages/<id>.js` |
 | 足迹校验报错 | `tools/check_footprint.py`（12 条规则见文件头 RULES） |
+| 要发 GitHub / 怕 API Key 被传上去 | `tools/check_secrets.py`（扫 **git 历史**，不只是工作区）；本机真实 key 从 `config.json` 取，只用于精确匹配、不打印 |
 
 ---
 
@@ -372,9 +373,36 @@ atomic  ←  backup  ←  builder  →  fontutil
 | --- | --- | --- | --- |
 | `check_footprint.py` | 足迹校验器（**12 条规则**，失败非零退出） | `Checker`、`Finding`、`RULES`、`parse_meta()`、`expected_layer()`、`module_name_for()`、`main()` | 评审者一键验证足迹真实性的入口 |
 | `gen_footprint.py` | 从源码 docstring 生成 `docs/footprint.json` | `build_footprint()`、`TEST_COMMANDS`、`LAYERS`、`main()` | 源码变动后必须重跑 |
+| `check_secrets.py` | **发布前密钥扫描**：扫 git 历史里有没有泄漏 API Key | `scan_text()`、`scan_history()`、`scan_worktree()`、`scan_local_config()`、`Finding`、`main()` | 见下 |
+| `web_probe.mjs` | 前端冒烟探针：Node + 最小 DOM shim **真实执行** `ui/web` 的代码 | CLI | 修白屏事故时加的；见 `tests/integration/test_web_syntax.py` |
 | `_m1_fix_future_imports.py` | **一次性**：vendored 文件加足迹头（合并进 docstring） | `PLAN`、`merge_header()`、`main()` | M2a 后删除 |
 | `_m1_fix_test_root.py` | **一次性**：测试文件改锚点查找工程根 | `PATTERN`、`REPLACEMENT`、`main()` | M2a 后删除 |
 | `_m1_sync_tested.py` | **一次性**：对齐 `@tested` 与真实测试文件 | `MAPPING`、`main()` | M2a 后删除 |
+
+### `check_secrets.py` —— 为什么必须扫**历史**
+
+`.gitignore` 只挡"以后不再提交"。一个 key 只要被提交过**一次**，它就永久留在
+git 对象里 —— 之后删文件、加 ignore 都没用，`git push` 会把整个历史一起推上去。
+GitHub 上因此泄露 key 的事故几乎都是这个形态：**本地 `git status` 干干净净，
+远端仓库里却有**。所以判据是"所有提交里的所有 blob"。
+
+两类判据：
+
+1. **形状**：`sk-` / `AIza` / `ghp_` / `AKIA` / 私钥头 等常见形态，
+   外加"把长随机串赋给 key 类名字"（`api_key = "..."`）；
+2. **实例**：把本机 `config.json` 里的**真实值**拿去历史里精确匹配 ——
+   这能抓到"真 key 被贴进文档/夹具"这种形状判据无能为力的形态。
+   真实值只用于匹配，报告里只出现打码后的形式。
+
+| 设计点 | 为什么 |
+| --- | --- |
+| 一次 `git cat-file --batch-all-objects` 流式读，而不是每个 blob 起一个进程 | 第一版逐对象起进程，同样仓库要 **23.7 秒**；慢到没法进门禁，而"跑不起来的安全检查"等于没有检查。现在约 **1.2 秒** |
+| 用 `--batch-all-objects`（含悬空对象）而不是只走可达对象 | 被 `reset`/`amend` 掉、还没 gc 的提交最危险：你以为删了，它还在 `.git` 里 |
+| 工作区模式只扫"**会被提交**的文件"（`ls-files` + `--others --exclude-standard`） | 直接遍历工作区会把本机 `config.json` 也报出来 —— 它根本不会被推送。**一个爱叫的门禁等于没有门禁** |
+| 同一个值只报一次 | `api_key = "sk-..."` 会同时命中形状与赋值两条判据，去重前同一行报两遍 |
+| 测试夹具用**拼接**构造假 key | 扫描器要扫自己所在的仓库；写成字面量它会把自己的测试文件报成泄漏 —— 门禁自己把自己绊倒。由 `TestSelfScan` 守住 |
+| 白名单只放"一眼就是假的"值，并要求它**仍在使用** | 否则白名单会越积越松，最后把真命中一起放过 |
+
 
 ### `check_footprint.py` 的 12 条规则
 
