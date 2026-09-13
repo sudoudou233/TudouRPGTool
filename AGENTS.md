@@ -170,23 +170,53 @@ python tests/run_all.py --suite compat
 
 见 `docs/STATE.md`。里程碑顺序：
 
-`M0 现状测绘`（✅）→ `M1 骨架与足迹`（✅）→ `M2a 可信基线 + P0 修复`
-→ `M2b core 收敛` → `M3a 翻译接入` → `M3b 修改接入` → `M4 UI 统一` → `M5 验收硬化`
+`M0 现状测绘`（✅）→ `M1 骨架与足迹`（✅）→ `M2a 可信基线 + P0 修复`（✅）
+→ `M2b core 收敛`（✅）→ `M3a 翻译接入`（✅）→ `M3b 修改接入`（✅）
+→ `M4 UI 统一`（✅）→ `M5 验收硬化`（✅）
 
-**M2b（2/3）结束时仍存在的临时状态**（下一个 AI 必须知道）：
+**M0 ～ M5 已全部完成**（需求 §8 的 8 项判据逐条落地，见 `docs/STATE.md` §2）。
+之后按用户反馈又修掉 6 个缺陷：白屏（`app.js` 块注释提前闭合）、
+副本缺 `Game.exe`、地图事件对话 54.86% 丢失、存档搜索规则过窄、
+道具列表只列已持有、收敛状态两处矛盾。
 
-* `core/marshal/` 里**有两份实现**（`doc_model` 与 `value_model`）——临时状态，
-  M2b 收敛为一份（方向见 **ADR-004**）。验收硬指标：两侧 roundtrip 断言同时通过。
-* ~~`core/_refbridge.py`~~ **已在 M2b 删除**。它的"与旧实现等价"证据已冻结为
+**下一步是"加功能"**：候选清单（含每条的价值、落点与验收判据）写在
+**`docs/ROADMAP.md` §5** —— F-01 汉化版差异报告、F-02 存档改动 diff、
+F-03 翻译记忆库跨游戏共享、F-04 批量改存档、F-05 手工覆盖引擎识别。
+开工照 §5 的"变更三连"走即可，不需要新的架构决策。
+
+### 接手时最该知道的三件事
+
+1. **先跑一遍** `python tests/run_all.py`（947 例）与
+   `python tools/check_footprint.py`。两者都必须退出码 0；不 0 就先修，
+   别在红灯上加工。
+2. **"写回之后核对"是本工程的核心纪律**：累计 8 个缺陷（N-12 ～ N-28）
+   都是"接口说成功、文件没变"。**加功能时也照这个标准写断言** ——
+   断言"扫描出来了"不算数，要断言"写进去了"。
+3. **夹具要覆盖现实里的分支**：白屏那次是"夹具只是文本、从未被解析"；
+   副本缺 exe 那次是"夹具的 `game_dir` 恰好等于 `js_root`"；
+   对话丢失那次是"夹具只断言扫描成功"。造夹具时先问一句
+   **"真实游戏里这个值会不会不一样"**。
+
+---
+
+## 8. 历史台账（已完成，仅备查）
+
+<details>
+<summary>展开查看 M2b 时期的临时状态记录（已全部消解）</summary>
+
+* ~~`core/marshal/` 里有两份实现（`doc_model` 与 `value_model`）~~ → 已按
+  **ADR-004** 收敛为一份（文档模型为二进制层 + 值层门面），`value_model.py` 已删。
+* ~~`core/_refbridge.py`~~ → 已删除。等价性证据冻结为
   `tests/unit/test_engines.py` 的 `TestFrozenRealGameBaseline`（7 个真实游戏）
-  与 `TestFrozenDetectionFixtures`（13 种判据组合，两套 MV/MZ 判据都覆盖）。
-* ~~`core/formats/` 尚未抽出共享的 `jsoncodec.py`~~ **已在 M2b 抽出**：
-  MV/MZ 两条路径共用一份 JSON / 压缩 / 加密包装实现，
+  与 `TestFrozenDetectionFixtures`（13 种判据组合）。
+* ~~`core/formats/` 尚未抽出共享的 `jsoncodec.py`~~ → 已抽出，
   `core/formats/__init__.py` 的 `CONVERGENCE_STATUS == "merged"`。
-* `features/translate/translators.py` 与 `session.py` 是 vendored 代码，
-  M3a 接线为正式模块；两个功能页仍是骨架（`status: skeleton`）。
+* ~~`features/translate/translators.py` 与 `session.py` 是 vendored 代码，
+  两个功能页仍是骨架~~ → 已接线为正式模块，两个页面已可用。
 
 **P0/P1 缺陷已在 M2a 全部修完**（B-01/02/03/04/05/06/07/10/11/26 + N-07/08），
 每条都有回归断言在 `tests/compat/test_m2a_regressions.py`。
-**改 `core/safety/builder.py` 或 `core/marshal/` 之前必须先读 `docs/STATE.md` §5** ——
+**改 `core/safety/builder.py` 或 `core/marshal/` 之前建议先读 `docs/STATE.md` §5** ——
 那里记录了每个缺陷的位置与修法，改坏会立刻让回归测试红灯。
+
+</details>
