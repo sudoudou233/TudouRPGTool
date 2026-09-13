@@ -5,6 +5,125 @@
 
 ---
 
+## 2026-09-13 ｜ 加功能：**最近打开的游戏**（F-09）
+
+### 需求
+
+用户从 `docs/ROADMAP.md` §5.1 的候选里选定 F-09（原描述"反复切换游戏时省事"）：
+记住打开过的游戏目录，一键切换，不用每次重新找路径。
+
+### 改了什么
+
+| 层 | 文件 | 内容 |
+| --- | --- | --- |
+| core | **新增 `core/recent.py`** | `RecentGames`（`items`/`record`/`forget`/`prune`/`clear`/`last_error`）+ `note_game(ctx, ...)` 便捷入口 |
+| core | `core/context.py` | `AppContext.recent`（**懒构造**：真实启动由 app.py 注入，测试里按需现造，于是功能里可以无条件用 `ctx.recent`） |
+| core | `app.py` | 构造 `RecentGames` 并注入 ctx（构造失败降级为 None，不影响启动） |
+| ui | `ui/routes.py` | 四个外壳级端点：`GET /api/recent`、`POST /api/recent/{forget,prune,clear}` |
+| ui | `ui/web/app.js` | 「最近打开」下拉（`renderRecent` / `openRecent` / `forgetRecent` / `pruneRecent` / `clearRecent`）+ `state.module` + `recent-changed` 监听 |
+| ui | `ui/web/index.html` | 新增 `#recent` 挂载点 |
+| ui | `ui/web/components.css` | `.recent-bar` / `.dropdown*` / `.dropdown-item.disabled` / `.btn.ghost`（只用令牌） |
+| ui | `ui/web/pages/{translate,cheats}.js` | 导出 `openGame(path)`；打开游戏后派发 `recent-changed` |
+| features | `features/{translate,cheats}/routes.py` | `open_game` 里各记一笔（翻译侧放在**缓存命中之前**） |
+| tools | `tools/web_probe.mjs` | 报告最近列表与下拉条目；**去掉固定 sleep 改为等元素出现**；失败时把页面 `#toast` 文字收进报告 |
+
+### 为什么放在 core，而不是某个功能里
+
+"最近打开过哪些游戏"是翻译与修改**都要用**的事实，而 feature 之间不许互相
+import。放 core 正好 —— 它只依赖 `core.paths` 与 `core.safety.atomic`，
+不认识引擎，也不认识 HTTP。
+
+### 顺序判据：列表位置，不是时间戳
+
+同一秒内连开两个游戏完全可能（自动扫描就是），按时间戳排会出现"顺序随机"。
+所以 `record()` 是**先删同项、再插到最前**，顺序就是列表本身；
+`when` 只做展示用。`test_order_is_list_position_not_timestamp` 钉住这一条。
+
+### 这个模块的主要设计内容是**容错**
+
+它是个锦上添花的功能，坏掉的正确表现是"功能消失"，而不是"把主流程拖垮"。
+所以有一整类用例专门喂坏数据：
+
+| 情况 | 行为 |
+| --- | --- |
+| 文件不存在 | 空列表，**不算错误**（连文件都不造出来） |
+| 内容是垃圾 / 顶层不是对象 / `items` 不是列表 | 空列表 + 中文 `last_error`，**绝不抛** |
+| 同名目录占位 | 空列表 + 明确说明 —— 静默当成"没有文件"会让用户永远查不出"为什么最近打开总是空的" |
+| 盘写不进去 | 内存里照常更新（本次会话可用）+ `last_error`；`note_game` 连异常一起吞掉 |
+| 目录已失效（游戏被移走） | 条目**保留**并标 `exists=False`，界面显示为不可点；删除只由「清理失效项」显式触发（可能只是暂时拔了移动硬盘） |
+
+`exists` 是**算出来的**而不是存下来的 —— 目录随时可能被删/移，
+存下来的那份一定会过期。
+
+### 页面契约扩充：可选 `openGame(path)`
+
+外壳的下拉要能"在当前功能页里打开这个游戏"，所以页面模块新增一个**可选**
+导出 `openGame(path)`。设计上刻意做了三件事：
+
+1. **页面不主动改外壳**：用自定义事件 `recent-changed` 通知，外壳自己重拉
+   `/api/recent`。页面只依赖 `dom.js` 与 `/api` —— 这条也是需求 §8-6
+   "新增功能不用改外壳"的一部分。
+2. **点最近打开走的是与手输目录完全相同的那条代码路径**（`openGame`），
+   不会出现两套打开逻辑各自演化。
+3. **没导出 `openGame` 就明确提示**"当前页面不支持从列表直接打开"，
+   而不是静默无反应 —— 静默失败正是本工程反复踩到的那一类缺陷。
+
+### 踩到并修掉的两个坑
+
+**坑 1：测试污染用户数据。** `recent.json` 的内容会**直接显示在用户导航栏
+的下拉里**，而 app 级测试（`test_web_syntax` 的两处）用的是默认 runtime 目录
+→ 跑一次测试就往用户的真实列表里塞几个临时游戏目录。既是测试污染，
+也是用户可见的垃圾。
+修法：`isolate_runtime()` 把 `TUDOU_RPGTOOL_DATA` 指到临时目录，且**必须在
+构造 `App` 之前**（`App.__init__` 就会构造 `RecentGames` 并解析路径）。
+修完确认 `runtime/recent.json` 不再被测试创建。
+
+**坑 2：探针时序不稳。** 原来 `mountPage` 之后固定 `sleep(400)`，
+实测 8 次里有 1 次扑空（页面挂载要 `await` 一次动态 `import`），表现是
+"这一次跑通了、下一次没跑通"，而且报告里只说"图标流程未完成"，
+看不出为什么。修法两步：
+
+* 改成 `waitFor(元素出现)`，不再赌固定时长；
+* 把页面 `#toast` 的文字收进探针报告 —— 失败时能直接看到页面上弹了什么
+  （实测那次弹的是页面自己的报错），而不是只知道"没出现"。
+
+修后连跑 8 次全绿，测试连跑 3 次全绿。
+
+### 怎么验证
+
+```powershell
+python tests/run_all.py            # 1082 例，0 失败（新增 60 例）
+python tools/check_footprint.py    # 46 文件 / 3 功能，0 错误
+python app.py --check              # 退出码 0，53 条路由
+```
+
+活服务器上两个功能各开一个游戏（真实 HTTP）：
+
+```
+/api/recent              -> {'ok': True, 'items': [], 'limit': 12, 'error': None}
+/api/cheats/open   wdss2 -> 列表出现 ('wdss2', 'cheats', 'mv', exists=True)
+/api/translate/open ToT  -> [('ToT 1.16.2.2 CN1.0', 'translate', 'vxace'),
+                             ('wdss2', 'cheats', 'mv')]
+```
+
+页面探针（真的点界面）：
+
+```
+最近打开：接口 2 条（含本次游戏=true），下拉里 3 项
+下拉文案：近最近打开 (2)wdss2mv改档×ToT 1.16.2.2 CN1.0vxace翻译×清理失效项全部清除
+```
+
+（3 项 = 2 条游戏 + 1 行操作按钮。）
+
+### 遗留
+
+* 列表存的是**目录名**而不是游戏标题（MV/MZ 可从 `System.json` 的
+  `gameTitle` 取，RGSS 可从 `Game.ini` 的 `Title=` 取）。目录名更可预测、
+  零解析成本；如果用户觉得认不出来，再补标题（`docs/OPEN-QUESTIONS.md` Q-13）。
+* 跨机器/跨用户共享列表没做（`runtime/` 是本机的）。
+
+---
+
 ## 2026-09-13 ｜ 加功能阶段开工：道具/武器/防具前面显示**游戏内图标**（F-10）
 
 ### 背景：用户要求"加功能，不再修 bug"

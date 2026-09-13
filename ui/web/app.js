@@ -25,9 +25,9 @@
  *   这一条由 tests/integration/test_web_syntax.py 用 node --check 强制。
  * ------------------------------------------------------------------------- */
 
-import { $, el, getJSON, toast, escapeHTML } from './dom.js';
+import { $, el, getJSON, postJSON, toast, escapeHTML } from './dom.js';
 
-const state = { nav: [], pages: [], current: null };
+const state = { nav: [], pages: [], current: null, recent: [], module: null };
 
 /** 需求 §3.3 要求收敛的三类重复实现（用于顶栏"收敛 x/3"指示）。 */
 const CONVERGENCE_KEYS = ['engines', 'formats', 'marshal'];
@@ -35,8 +35,9 @@ const CONVERGENCE_KEYS = ['engines', 'formats', 'marshal'];
 /* ------------------------------------------------------------------ 启动 */
 async function boot() {
   bindChrome();
-  await Promise.all([loadHealth(), loadFeatures(), loadNav()]);
+  await Promise.all([loadHealth(), loadFeatures(), loadNav(), loadRecent()]);
   renderNav();
+  renderRecent();
   renderFeatureTable();
   // 默认打开第一个功能页
   if (state.nav.length) {
@@ -48,14 +49,21 @@ async function boot() {
 
 function bindChrome() {
   $('#btn-refresh').addEventListener('click', async () => {
-    await Promise.all([loadHealth(), loadFeatures(), loadNav()]);
+    await Promise.all([loadHealth(), loadFeatures(), loadNav(), loadRecent()]);
     renderNav();
+    renderRecent();
     renderFeatureTable();
     if (state.current) mountPage(state.current);
     toast('状态已刷新', 'ok');
   });
   $('#btn-paths').addEventListener('click', () => showDiag('/api/paths'));
   $('#btn-health').addEventListener('click', () => showDiag('/api/health'));
+  /* 功能页打开一个游戏后会派发 recent-changed —— 外壳据此刷新下拉。
+     用事件而不是让页面直接调外壳函数：页面模块只依赖 dom.js 与 /api，
+     不需要知道外壳长什么样（新增功能不必改外壳，这条是需求 §8-6 的证据）。 */
+  document.addEventListener('recent-changed', () => {
+    loadRecent().then(renderRecent).catch(() => {});
+  });
 }
 
 /* ------------------------------------------------------------------ 数据加载 */
@@ -136,6 +144,123 @@ function renderNav() {
   }
 }
 
+/* ------------------------------------------------------------------ 最近打开 */
+async function loadRecent() {
+  try {
+    const payload = await getJSON('/api/recent');
+    state.recent = payload.items || [];
+    state.recentNote = payload.error || '';
+  } catch (err) {
+    state.recent = [];
+    state.recentNote = '最近打开记录读取失败：' + err.message;
+  }
+}
+
+/*: 哪个功能用过这个游戏（下拉里的小标签） */
+const KIND_LABEL = { translate: '翻译', cheats: '改档' };
+
+function renderRecent() {
+  const host = $('#recent');
+  if (!host) return;
+  host.innerHTML = '';
+  if (!state.recent.length) {
+    host.append(el('span', { class: 'hint', text: '还没有打开过游戏' }));
+    return;
+  }
+  const list = el('div', { class: 'dropdown-menu', id: 'recent-menu' });
+  for (const item of state.recent) {
+    const usable = item.exists !== false;
+    const row = el('div', {
+      class: 'dropdown-item' + (usable ? '' : ' disabled'),
+      dataset: { path: item.path },
+      title: usable ? item.path : `${item.path}（目录已不存在）`,
+    }, [
+      el('span', { class: 'grow', text: item.label || item.path }),
+      item.engine ? el('span', { class: 'tag', text: item.engine }) : null,
+      item.kind ? el('span', { class: 'tag', text: KIND_LABEL[item.kind] || item.kind }) : null,
+      el('button', {
+        class: 'btn sm ghost', type: 'button', text: '×',
+        title: '从列表里移除（不动磁盘上的文件）',
+        onclick: (ev) => { ev.stopPropagation(); forgetRecent(item.path); },
+      }),
+    ]);
+    if (usable) row.addEventListener('click', () => openRecent(item.path));
+    list.append(row);
+  }
+  list.append(el('div', { class: 'dropdown-sep' }));
+  list.append(el('div', { class: 'dropdown-item' }, [
+    el('button', {
+      class: 'btn sm', type: 'button', text: '清理失效项',
+      onclick: () => pruneRecent(),
+    }),
+    el('button', {
+      class: 'btn sm danger', type: 'button', text: '全部清除',
+      onclick: () => clearRecent(),
+    }),
+  ]));
+  host.append(el('details', { class: 'dropdown', id: 'recent-dropdown' }, [
+    el('summary', { class: 'nav-item' }, [
+      el('span', { class: 'icon', text: '近' }),
+      el('span', { text: `最近打开 (${state.recent.length})` }),
+    ]),
+    list,
+  ]));
+  if (state.recentNote) {
+    host.append(el('span', { class: 'hint', text: state.recentNote }));
+  }
+}
+
+/** 在当前功能页里打开这个游戏。
+ *
+ * 页面模块**可选**导出 ``openGame(path)``；没导出就明确告知，而不是静默失败 ——
+ * 静默失败正是本工程反复踩到的那一类缺陷。 */
+async function openRecent(path) {
+  const module = state.module;
+  if (!module || typeof module.openGame !== 'function') {
+    toast('当前页面不支持从列表直接打开，请用页面上的「浏览…」选择目录', 'warn', 7000);
+    return;
+  }
+  try {
+    await module.openGame(path);
+    const box = $('#recent-dropdown');
+    if (box) box.open = false;
+  } catch (err) {
+    toast('打开失败：' + err.message, 'error', 10000);
+  }
+}
+
+async function forgetRecent(path) {
+  try {
+    const res = await postJSON('/api/recent/forget', { path });
+    state.recent = res.items || [];
+    renderRecent();
+  } catch (err) {
+    toast('移除失败：' + err.message, 'error');
+  }
+}
+
+async function pruneRecent() {
+  try {
+    const res = await postJSON('/api/recent/prune', {});
+    state.recent = res.items || [];
+    renderRecent();
+    toast(res.removed ? `清理了 ${res.removed} 条失效记录` : '没有失效的记录', 'ok');
+  } catch (err) {
+    toast('清理失败：' + err.message, 'error');
+  }
+}
+
+async function clearRecent() {
+  try {
+    const res = await postJSON('/api/recent/clear', {});
+    state.recent = res.items || [];
+    renderRecent();
+    toast(res.removed ? `已清除 ${res.removed} 条记录` : '列表本来就是空的', 'ok');
+  } catch (err) {
+    toast('清除失败：' + err.message, 'error');
+  }
+}
+
 /* ------------------------------------------------------------------ 功能状态表 */
 function renderFeatureTable() {
   const body = $('#feature-rows');
@@ -185,8 +310,12 @@ async function mountPage(featureId) {
     if (typeof module.render !== 'function') {
       throw new Error(`页面模块 ${page.module}.js 未导出 render(host)`);
     }
+    // 记住当前模块：外壳的「最近打开」下拉要靠它的 openGame(path) 打开游戏。
+    // 切页时先清空，避免"点最近打开却在上一个页面里执行"。
+    state.module = module;
     await module.render(host, { nav: item, features: state.features });
   } catch (err) {
+    state.module = null;
     host.append(el('div', { class: 'card' }, [
       el('h2', { text: `页面加载失败：${page.title}` }),
       el('div', { class: 'error-text', text: err.message }),
@@ -219,4 +348,4 @@ window.addEventListener('DOMContentLoaded', () => {
   });
 });
 
-export { boot, renderNav, renderFeatureTable, mountPage, escapeHTML };
+export { boot, renderNav, renderFeatureTable, mountPage, renderRecent, escapeHTML };

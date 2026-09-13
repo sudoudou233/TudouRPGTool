@@ -46,7 +46,9 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 while not os.path.isfile(os.path.join(_ROOT, "app.py")):
@@ -59,6 +61,13 @@ if _ROOT not in sys.path:
 
 WEB = os.path.join(_ROOT, "ui", "web")
 PROBE = os.path.join(_ROOT, "tools", "web_probe.mjs")
+
+
+def read_js(rel):
+    """读 ``ui/web`` 下的一个文件（相对 WEB，用 / 分隔）。"""
+    with open(os.path.join(WEB, rel.replace("/", os.sep)), encoding="utf-8") as f:
+        return f.read()
+
 
 #: 前端 js 文件（页面 + 外壳）
 def web_js_files():
@@ -74,6 +83,22 @@ def web_js_files():
 def node_exe():
     """找一个可用的 Node；没有返回 None（本文件整类 skip）。"""
     return shutil.which("node") or shutil.which("node.exe")
+
+
+def isolate_runtime(testcase, root):
+    """把 ``TUDOU_RPGTOOL_DATA`` 指到临时目录，再返回该目录。
+
+    ⚠ 为什么 app 级测试必须隔离运行时目录：「最近打开的游戏」（F-09）会写
+    ``<runtime>/recent.json``，而它的内容**会直接显示在用户的导航栏下拉里**。
+    不隔离的话，跑一次测试就会往用户的真实列表里塞几个临时游戏目录 ——
+    既是测试污染，也是用户可见的垃圾。
+    """
+    data = os.path.join(root, "runtime")
+    os.makedirs(data, exist_ok=True)
+    patcher = mock.patch.dict(os.environ, {"TUDOU_RPGTOOL_DATA": data})
+    patcher.start()
+    testcase.addClassCleanup(patcher.stop)
+    return data
 
 
 def _parse_position(text):
@@ -291,6 +316,14 @@ class TestWebProbe(unittest.TestCase):
         if not os.path.isfile(PROBE):
             raise unittest.SkipTest("缺少 tools/web_probe.mjs")
 
+        # 隔离运行时目录（见 isolate_runtime 的说明）—— 必须在构造 App 之前
+        data = os.path.join(tempfile.mkdtemp(prefix="webprobe_"), "runtime")
+        os.makedirs(data, exist_ok=True)
+        cls._data_patch = mock.patch.dict(os.environ,
+                                          {"TUDOU_RPGTOOL_DATA": data})
+        cls._data_patch.start()
+        cls._data_dir = data
+
         import app as app_module
         cls.application = app_module.App(port=0, bind="127.0.0.1")
         cls.application.build()
@@ -314,6 +347,8 @@ class TestWebProbe(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.application.stop()
+        cls._data_patch.stop()
+        shutil.rmtree(os.path.dirname(cls._data_dir), ignore_errors=True)
 
     def _report(self):
         if self.report is None:
@@ -416,7 +451,6 @@ class TestWebProbeIconFlow(unittest.TestCase):
 
         import tempfile
         from tests.features.cheats.test_item_icons import make_mv_icon_game
-
         try:
             cls.tmp = tempfile.TemporaryDirectory(prefix="probe_icon_",
                                                   ignore_cleanup_errors=True)
@@ -425,6 +459,10 @@ class TestWebProbeIconFlow(unittest.TestCase):
         cls.game_dir = os.path.join(cls.tmp.name, "game")
         os.makedirs(cls.game_dir, exist_ok=True)
         make_mv_icon_game(cls.game_dir)
+
+        # 隔离运行时目录：图标流程会通过界面打开游戏 → 写 recent.json，
+        # 不隔离就会把临时游戏塞进用户真实的「最近打开」列表里。
+        isolate_runtime(cls, cls.tmp.name)
 
         import app as app_module
         cls.application = app_module.App(port=0, bind="127.0.0.1")
@@ -515,6 +553,98 @@ class TestWebProbeIconFlow(unittest.TestCase):
         self.assertEqual(flow["cellsAfterToggle"], flow["cells"],
                          "开关一关，图标格就被删了（应该是只藏不删）")
         self.assertEqual(flow["classWhenOn"], "")
+
+    # ------------------------------------------------ 「最近打开」（F-09）
+    def test_opening_a_game_through_the_ui_records_it(self):
+        """**通过界面**打开的游戏必须进「最近打开」列表。
+
+        上面那一串是真人操作（填目录 → 点读取 → 点载入），所以这条同时
+        证明了"记录发生在真实链路上"，而不是"某个端点单独测过"。
+        """
+        flow = self._flow()
+        self.assertTrue(flow.get("recentHasGame"),
+                        "刚打开的游戏没进最近列表：%s" % flow.get("recentApiCount"))
+        self.assertEqual(flow.get("recentLabel"), os.path.basename(self.game_dir))
+
+    def test_shell_dropdown_refreshes_without_a_page_reload(self):
+        """页面派发 recent-changed → 外壳重新拉 → 下拉重新渲染。
+
+        这一整条链只有"真的跑一遍"才能验：光断言 /api/recent 有数据，
+        证明不了界面跟着更新（下拉会一直停在"还没有打开过游戏"）。
+        """
+        flow = self._flow()
+        self.assertGreaterEqual(
+            flow.get("recentDomItems", 0), 1,
+            "外壳的「最近打开」下拉没有渲染出条目：%s" % flow.get("recentDomText"))
+
+
+class TestShellRecentDropdown(unittest.TestCase):
+    """外壳的「最近打开」下拉（F-09）—— 静态契约。
+
+    执行层由 ``TestWebProbeIconFlow`` 里那两条断言负责（真的开一个游戏，
+    再看下拉有没有跟着更新）；这一层负责**指出该改哪儿**。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app_js = read_js("app.js")
+        cls.html = read_js("index.html")
+        cls.css = read_js("components.css")
+
+    def test_html_has_a_mount_point(self):
+        self.assertIn('id="recent"', self.html,
+                      "index.html 没有「最近打开」的挂载点")
+
+    def test_shell_talks_to_the_recent_api(self):
+        for endpoint in ("/api/recent", "/api/recent/forget",
+                         "/api/recent/prune", "/api/recent/clear"):
+            with self.subTest(endpoint=endpoint):
+                self.assertIn(endpoint, self.app_js)
+
+    def test_shell_listens_for_the_refresh_event(self):
+        """页面不能直接调外壳函数 —— 用事件解耦（新增功能不必改外壳）。"""
+        self.assertIn("recent-changed", self.app_js)
+        self.assertIn("addEventListener('recent-changed'", self.app_js)
+
+    def test_dropdown_marks_missing_folders_unusable(self):
+        """目录不在了要**留在列表里但不可点**（可能只是暂时移走）。"""
+        self.assertIn("exists", self.app_js)
+        self.assertIn("dropdown-item", self.app_js)
+        self.assertIn(".dropdown-item.disabled", self.css)
+
+    def test_forgetting_is_visually_separate_from_deleting(self):
+        """「从列表里移除」必须写明"不动磁盘上的文件" —— 否则用户不敢点。"""
+        self.assertIn("不动磁盘上的文件", self.app_js)
+
+    def test_missing_openGame_is_reported_not_swallowed(self):
+        """页面没导出 openGame 时要明确提示，不能点了没反应。"""
+        self.assertIn("不支持从列表直接打开", self.app_js)
+
+    def test_pages_that_open_games_export_openGame(self):
+        """凡能用目录打开游戏的功能页，都必须导出 ``openGame(path)``。
+
+        外壳的下拉只会调**当前页面模块**的 openGame —— 没导出的话，
+        在那个页面上点最近打开只会弹一句"不支持"，功能等于半残。
+        用"页面里出现了 ``/api/<name>/open``"当判据，新增功能自动被覆盖。
+        """
+        checked = []
+        for name in ("translate", "cheats", "selfcheck"):
+            path = os.path.join(WEB, "pages", name + ".js")
+            if not os.path.isfile(path):
+                continue
+            source = read_js(os.path.join("pages", name + ".js"))
+            if "/api/%s/open" % name not in source:
+                continue
+            checked.append(name)
+            with self.subTest(page=name):
+                self.assertRegex(
+                    source, r"export\s+async\s+function\s+openGame",
+                    "%s.js 能用目录打开游戏，却没导出 openGame(path) —— "
+                    "外壳的「最近打开」下拉对它无效" % name)
+                self.assertIn("recent-changed", source,
+                              "%s.js 打开游戏后没有通知外壳刷新下拉" % name)
+        self.assertEqual(sorted(checked), ["cheats", "translate"],
+                         "判据失效了（没找到任何'能打开游戏'的页面）")
 
 
 if __name__ == "__main__":

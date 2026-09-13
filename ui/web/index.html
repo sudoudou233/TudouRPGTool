@@ -4,7 +4,8 @@
 
   @feature  none
   @layer    ui
-  @public   (页面骨架：#nav 导航挂载点、#view 页面容器、#toast 提示容器)
+  @public   (页面骨架：#nav 导航挂载点、#recent 最近打开挂载点、
+            #view 页面容器、#toast 提示容器)
   @depends  tokens.css, components.css, app.js
   @tested   tests/unit/test_server.py（检查静态资源可服务且含关键挂载点）
   @footprint docs/UI_SPEC.md#shell
@@ -32,6 +33,9 @@
 
   <main>
     <nav class="nav" id="nav"></nav>
+    <!-- 「最近打开」下拉：跨功能共享（翻译与改档都会往里记）。
+         由 app.js 渲染，内容来自 /api/recent。 -->
+    <div class="recent-bar" id="recent"></div>
 
     <section class="card" id="feature-status-card">
       <h2>功能模块加载情况</h2>

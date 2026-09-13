@@ -4,7 +4,7 @@
 @feature  none
 @layer    core
 @public   Router, Route, PageSpec, AppContext, Response
-@depends  core.paths
+@depends  core.paths, core.recent
 @tested   tests/unit/test_registry.py
 @footprint docs/MODULES.md#corecontext
 
@@ -191,11 +191,14 @@ class Router(object):
 class AppContext(object):
     """传给 ``register(ctx)`` 的装配上下文。"""
 
-    def __init__(self, app=None, router=None, config=None, jobs=None):
+    def __init__(self, app=None, router=None, config=None, jobs=None,
+                 recent=None):
         self.app = app
         self.router = router if router is not None else Router()
         self.config = config
         self.jobs = jobs
+        self._recent = recent
+        self._recent_ready = recent is not None
         self.pages = {}          # page_id -> PageSpec
         self._feature = None     # 当前正在注册的功能 id
 
@@ -204,6 +207,26 @@ class AppContext(object):
     def paths(self):
         """只读路径访问器（模块对象，调用方不得改写其常量）。"""
         return paths
+
+    # ------------------------------------------------------------ 共享状态
+    @property
+    def recent(self):
+        """最近打开的游戏（MRU 列表）—— 两个功能共享同一份。
+
+        **懒构造**：真实启动时由 ``app.py`` 显式注入；测试里直接
+        ``AppContext(router=Router())`` 时按需现造一个，于是功能代码可以
+        无条件写 ``ctx.recent`` / ``core.recent.note_game(ctx, ...)``，
+        不必到处判空。构造失败（运行目录不可写等）返回 ``None`` ——
+        调用方走 :func:`core.recent.note_game`，那里会安全地当成无操作。
+        """
+        if not self._recent_ready:
+            self._recent_ready = True
+            try:
+                from . import recent as recent_mod
+                self._recent = recent_mod.RecentGames()
+            except Exception:                 # noqa: BLE001
+                self._recent = None
+        return self._recent
 
     # ------------------------------------------------------------ 注册接口
     def route(self, method, pattern, handler=None, name=None):

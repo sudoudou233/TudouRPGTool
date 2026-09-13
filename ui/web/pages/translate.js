@@ -3,7 +3,7 @@
  *
  * @feature  translate
  * @layer    ui
- * @public   render
+ * @public   render, openGame
  * @depends  /dom.js, /api/translate/*, /api/job, /api/cancel
  * @tested   tests/integration/test_translate_page.py（静态契约）
  * @footprint docs/UI_SPEC.md
@@ -98,7 +98,7 @@ function buildDirCard() {
       const res = await postJSON('/api/translate/pick_folder', { initial: dirInput.value });
       if (res.cancelled || !res.dir) return;
       dirInput.value = res.dir;
-      await openDir(res.dir);
+      await openGame(res.dir);
     } catch (err) {
       /* 没有图形环境（远程/精简 Python）时会走到这里 —— 引导用户粘贴路径 */
       toast('无法打开系统对话框：' + err.message + '（可直接粘贴路径）', 'warn', 8000);
@@ -108,7 +108,7 @@ function buildDirCard() {
   });
 
   const openBtn = el('button', { class: 'btn primary', type: 'button', text: '打开并识别' });
-  openBtn.addEventListener('click', () => openDir(dirInput.value.trim()));
+  openBtn.addEventListener('click', () => openGame(dirInput.value.trim()));
 
   return el('section', { class: 'card' }, [
     el('h2', {}, [el('span', { class: 'step', text: '1' }),
@@ -122,7 +122,11 @@ function buildDirCard() {
   ]);
 }
 
-async function openDir(dir) {
+/** 打开一个游戏目录（由页面上的「打开并识别」与外壳的「最近打开」共用）。
+ *
+ * 导出给外壳：`app.js` 的「最近打开」下拉会调 `openGame(path)` ——
+ * 于是"点最近打开"走的是与手输目录**完全相同**的那条代码路径。 */
+export async function openGame(dir) {
   if (!dir) { toast('请先选择游戏目录', 'warn'); return; }
   try {
     const res = await postJSON('/api/translate/open', { dir });
@@ -131,6 +135,10 @@ async function openDir(dir) {
       ? `已载入上次的扫描结果（${res.cached_entries} 条），可直接继续`
       : '已识别引擎，请点击「扫描文本」', 'ok');
     await reload();
+    // 告诉外壳"最近打开列表变了"（见 app.js 的 recent-changed 监听）
+    try {
+      document.dispatchEvent(new CustomEvent('recent-changed'));
+    } catch (err) { /* 只影响下拉新鲜度 */ }
   } catch (err) {
     toast('打开失败：' + err.message, 'error');
   }

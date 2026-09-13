@@ -336,9 +336,18 @@ function collect(node, pred, out = []) {
 
 if (GAME) {
   const icon = { game: GAME, steps: [], ok: false, error: null };
+  /** 把页面上弹出的提示文字收集起来 —— 流程失败时这就是最直接的线索。 */
+  const toastText = () => {
+    const host = doc.getElementById('toast');
+    return host ? host.textContent.slice(0, 300) : '';
+  };
   try {
     await loadModule(`${WEB}/app.js`).then((m) => m.mountPage('cheats'));
-    await new Promise((r) => setTimeout(r, 400));
+    /* ⚠ 等元素真的出现，不要用一个固定 sleep：
+       页面挂载要 await 一次动态 import，慢一点时固定等待就会扑空，
+       表现是"这一次跑通了、下一次没跑通"（本探针实测踩到过）。 */
+    const ready = await waitFor(() => doc.getElementById('ch-open'), 15000);
+    if (!ready) throw new Error('修改页没有渲染出「读取游戏数据」按钮');
 
     const view = doc.getElementById('view');
     const dirInput = doc.getElementById('ch-dir');
@@ -349,6 +358,10 @@ if (GAME) {
 
     const gotSaves = await waitFor(() => doc.getElementById('ch-load-0'));
     icon.steps.push(`存档载入按钮出现=${gotSaves}`);
+    if (!gotSaves) {
+      icon.toast = toastText();
+      icon.dirValue = dirInput ? dirInput.value : '(无输入框)';
+    }
     if (gotSaves) {
       const toggle = doc.getElementById('ch-icon-toggle');
       const hint = doc.getElementById('ch-icon-hint');
@@ -357,7 +370,6 @@ if (GAME) {
       icon.toggleChecked = !!(toggle && toggle.checked);
       icon.hint = hint ? hint.textContent : '';
 
-      doc.getElementById('ch-load-0').click();
       // ⚠ 用 class **分词**判断，不能用 `attributes.class === 'icon-cell'`：
       // "空位"格是 `icon-cell blank`，等值比较会把它整类漏掉（本探针第一版
       // 就漏了 2 个，把 43 报成了 41）。
@@ -365,8 +377,12 @@ if (GAME) {
         .split(/\s+/).includes('icon-cell');
       const isBlank = (n) => String(n.attributes.class || '')
         .split(/\s+/).includes('blank');
+
+      doc.getElementById('ch-load-0').click();
       const gotItems = await waitFor(
-        () => collect(view, isIconCell).length > 0);
+        () => collect(view, isIconCell).length > 0, 15000);
+      if (!gotItems) icon.toast = toastText();
+      icon.steps.push(`载入存档后出现图标格=${gotItems}`);
       // 再等到表格不再增长，才敢数格子（否则会数到建了一半的表）
       await waitStable(() => collect(doc.getElementById('ch-items'),
         (n) => n.tagName === 'TR').length);
@@ -404,10 +420,29 @@ if (GAME) {
       toggle.checked = true;
       toggle.dispatchEvent({ type: 'change' });
       icon.classWhenOn = itemsHost.className;
+
+      /* 顺手验证「最近打开」：刚才这一串操作是通过**界面**打开的游戏，
+         所以它必须已经进了列表，而且外壳的下拉要跟着更新。
+         这一条把"页面派发 recent-changed → 外壳重新拉 → 重新渲染"整条链
+         串起来验，光断言 /api/recent 有数据是证明不了界面刷新这一段的。 */
+      const recentJson = await realFetch(BASE + '/api/recent')
+        .then((r) => r.json()).catch(() => ({}));
+      const recentPaths = (recentJson.items || []).map((i) => i.path);
+      icon.recentApiCount = recentPaths.length;
+      icon.recentHasGame = recentPaths.some(
+        (p) => p.toLowerCase() === GAME.toLowerCase());
+      icon.recentLabel = (recentJson.items || [])[0]?.label || '';
+      const recentHost = doc.getElementById('recent');
+      icon.recentDomItems = recentHost
+        ? collect(recentHost, (n) => String(n.attributes.class || '')
+          .split(/\s+/).includes('dropdown-item')).length
+        : 0;
+      icon.recentDomText = recentHost ? recentHost.textContent.slice(0, 120) : '';
       icon.ok = gotItems;
     }
   } catch (err) {
     icon.error = `${err.constructor.name}: ${err.message}`;
+    icon.toast = toastText();
   }
   report.iconFlow = icon;
 }
@@ -441,6 +476,10 @@ if (AS_JSON) {
     console.log('              关掉后 class=%j，图标格仍 %d 个（不重建表格）'
       , f.hiddenClassWhenOff, f.cellsAfterToggle);
     console.log('              打开后 class=%j', f.classWhenOn);
+    console.log('              最近打开：接口 %d 条（含本次游戏=%s），下拉里 %d 项'
+      , f.recentApiCount, f.recentHasGame, f.recentDomItems);
+    if (f.recentDomText) console.log('              下拉文案：%s', f.recentDomText);
+    if (f.toast) console.log('              页面提示：%s', f.toast);
   }
   if (report.fatal) console.log('!! 致命错误 :', report.fatal);
   report.problems.forEach((p) => console.log('页面告警    :', p));

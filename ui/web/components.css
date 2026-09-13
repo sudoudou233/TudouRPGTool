@@ -97,6 +97,67 @@ main {
   cursor: pointer;
 }
 
+/* ------------------------------------------------------- 最近打开（下拉） */
+.recent-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-4);
+}
+.dropdown { position: relative; }
+.dropdown > summary {
+  list-style: none;          /* 去掉 <details> 默认的三角，用 .nav-item 的外观 */
+  cursor: pointer;
+}
+.dropdown > summary::-webkit-details-marker { display: none; }
+.dropdown-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + var(--sp-1));
+  left: 0;
+  min-width: 320px;
+  max-width: min(560px, 92vw);
+  padding: var(--sp-2);
+  background: var(--card2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  max-height: 60vh;
+  overflow: auto;
+}
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.dropdown-item:hover { background: var(--card); }
+/* 目录已不存在：**留在列表里但不可点**。
+   直接删掉会让用户"移动了一下目录就找不到记录了"（core/recent.py 有说明）。 */
+.dropdown-item.disabled { opacity: .5; cursor: not-allowed; }
+.dropdown-item.disabled:hover { background: none; }
+.dropdown-item .grow {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dropdown-sep {
+  height: 1px;
+  background: var(--line);
+  margin: var(--sp-2) 0;
+}
+.btn.ghost {
+  background: none;
+  border-color: transparent;
+  color: var(--muted);
+}
+.btn.ghost:hover { color: var(--danger); border-color: var(--line); }
+
 /* ------------------------------------------------------------ 小开关 */
 /* 用于"显示图标"这类**纯显示偏好**：改的是看法，不是数据，所以用开关
    而不是复选框 —— 复选框在这个界面里已经表示"筛选条件"(.check)。 */

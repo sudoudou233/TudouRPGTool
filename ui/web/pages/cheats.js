@@ -3,7 +3,7 @@
  *
  * @feature  cheats
  * @layer    ui
- * @public   render
+ * @public   render, openGame
  * @depends  /dom.js, /api/cheats/*
  * @tested   tests/integration/test_cheats_page.py（静态契约）
  * @footprint docs/UI_SPEC.md
@@ -145,22 +145,40 @@ function buildDirCard() {
   ]);
 }
 
-async function openGame(dir) {
+/** 打开一个游戏目录（由页面上的「读取游戏数据」与外壳的「最近打开」共用）。
+ *
+ * 导出给外壳：`app.js` 的「最近打开」下拉会调 `openGame(path)` ——
+ * 于是"点最近打开"走的是与手输目录**完全相同**的那条代码路径，
+ * 不会出现两套打开逻辑各自演化。 */
+export async function openGame(dir) {
   if (!dir) { toast('请先填写游戏目录', 'warn'); return; }
   try {
     const res = await postJSON('/api/cheats/open', { dir });
     state.game = res.game;
     applyEngineChips(res);
     toast(`已识别：${res.summary || ''}（${res.saves} 个存档）`, 'ok', 6000);
-    // ⚠ 换了游戏必须先把上一个游戏的表格清掉：那些行里的 id/图标索引
+    // 换了游戏必须先把上一个游戏的表格清掉：那些行里的 id/图标索引
     // 是**上一个游戏**的数据表，配上新游戏的名字表与图集会显示成
     // "看着像新的、其实是旧的" —— 正是本工程反复踩到的那一类缺陷。
     clearSaveViews('已切换游戏，请重新选择存档。');
     await loadIconInfo();
     await loadSaves();
     await loadData(false);
+    notifyRecentChanged();
   } catch (err) {
     toast('读取失败：' + err.message, 'error', 12000);
+  }
+}
+
+/** 告诉外壳"最近打开列表变了"（外壳据此刷新下拉）。
+ *
+ * 用自定义事件而不是直接调外壳函数：页面模块只依赖 dom.js 与 /api，
+ * 不需要知道外壳长什么样 —— 这条也是"新增功能不用改外壳"的一部分。 */
+function notifyRecentChanged() {
+  try {
+    document.dispatchEvent(new CustomEvent('recent-changed'));
+  } catch (err) {
+    /* 事件发不出去只影响下拉的新鲜度，不影响功能 */
   }
 }
 

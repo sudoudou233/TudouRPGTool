@@ -32,6 +32,7 @@ import subprocess
 import sys
 
 from core import paths
+from core import recent as recent_mod
 from core.safety import backup as backup_mod
 from core.safety import builder as build_mod
 
@@ -124,6 +125,12 @@ class TranslateService(object):
         if not info.get("supported"):
             raise ValueError("检测到 %s，但该引擎的数据格式暂不支持"
                              % info.get("label"))
+        # 记一笔"最近打开过"（两个功能共享同一份列表）。放在**缓存命中之前**，
+        # 于是"复用已存会话"也会刷新它在列表里的位置。失败不影响主流程。
+        recent_mod.note_game(self.ctx, game_dir, kind="translate",
+                             label=os.path.basename(game_dir.rstrip("\\/"))
+                             or game_dir,
+                             engine=info.get("engine"))
         if os.path.isfile(path):
             try:
                 self.session = session_mod.Session.load(path)

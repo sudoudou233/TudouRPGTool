@@ -28,6 +28,8 @@
 | 道具/武器/防具前面要显示游戏内图标 | `core/iconutil.py`（图集定位+解密+切片几何）→ `features/cheats/routes.py` 的 `icon_of`/`icon_meta`/`icon_sheet` → `ui/web/pages/cheats.js` 的 `iconCell` |
 | 图标画出来了但位置不对 / 画的是别的道具 | 先查 `cell` 与 `columns`：MV/MZ **32px**、VX Ace **24px**，都是 16 列（`core/constants.py` 的 `ICON_CELLS`）；再查换游戏后 `_icon_cache` 有没有失效（N-29） |
 | 图标全是空格子 / 开关是灰的 | `icon_info` 的 `reason` 就是答案：没图集 / 解不开 / 尺寸不认识，三种都如实说明 |
+| 「最近打开」列表不对（空的 / 有失效项 / 想清掉） | `core/recent.py`（MRU 存储）+ `ui/routes.py` 的四个端点 + `ui/web/app.js` 的 `renderRecent` |
+| 点了「最近打开」没反应 | 当前页面模块没导出 `openGame(path)`；用 `test_web_syntax.py::TestShellRecentDropdown` 定位 |
 | 界面样式不统一 | `ui/web/tokens.css` + `components.css` + `docs/UI_SPEC.md` |
 | 新增一个页面 | `features/<name>/manifest.py` 里加 `pages` 一条 + 新建 `ui/web/pages/<id>.js` |
 | 足迹校验报错 | `tools/check_footprint.py`（12 条规则见文件头 RULES） |
@@ -175,6 +177,40 @@ MV 的 `.rpgmvp` 与 MZ 的 `.png_` 是同一套加壳 —— 偏移 0..15 恒�
 不清就会出现"新游戏的道具名配旧游戏的图集"，画出来是**另一件道具的图标**，
 看着还挺正常 —— 与 N-12～N-28 是同一类缺陷，有专门断言守着
 （`test_item_icons.TestIconCacheInvalidation`）。
+
+### core/recent.py
+
+| 项 | 内容 |
+| --- | --- |
+| 职责 | "最近打开过哪些游戏"（MRU 列表）的**读取、记录、清理与落盘**；两个功能共享同一份 |
+| 公开 API | `RecentGames`（`items`/`record`/`forget`/`prune`/`clear`/`last_error`）、`note_game(ctx, ...)`、`FILENAME`、`DEFAULT_LIMIT` |
+| 谁调用 | `features/cheats/routes.py` 与 `features/translate/routes.py` 的 `open_game`（都走 `note_game`）；`ui/routes.py` 的四个端点；`core/context.AppContext.recent` |
+| 存储 | `<runtime>/recent.json`（已 gitignore），写入一律走 `core.safety.atomic` |
+| 改动影响 | 只影响导航栏的「最近打开」下拉；**不参与任何业务写回**，坏掉最多是下拉空着 |
+| 测试 | `tests/unit/test_recent.py`（51 例）、`tests/integration/test_web_syntax.py::TestShellRecentDropdown` + `TestWebProbeIconFlow` 的两条端到端断言 |
+
+**为什么放在 `core`**：翻译与修改两个功能都要用，而 feature 之间不许互相
+import。放 core 正好 —— 它只依赖 `core.paths` 与 `core.safety.atomic`，
+不认识引擎，也不认识 HTTP。
+
+**顺序来自列表位置，不是时间戳**。同一秒内连开两个游戏完全可能
+（自动扫描就是），按时间戳排会出现"顺序随机"。所以 `record()` 是
+**先删同项、再插到最前**；`when` 只做展示。
+
+**容错是这个模块的主要设计内容**（它是个锦上添花的功能，坏了只该"功能消失"，
+不该拖垮主流程）：
+
+| 情况 | 行为 |
+| --- | --- |
+| 文件不存在 | 空列表，不是错误 |
+| 内容是垃圾 / 结构不对 / `items` 不是列表 | 空列表 + `last_error`（中文原因），**不抛** |
+| 同名目录占位 | 空列表 + 明确说明（静默忽略会让用户永远查不出"为什么总是空的"） |
+| 盘写不进去 | 内存里照常更新（本次会话可用）+ `last_error`；`note_game` 把异常也吞掉 |
+| 目录已失效 | 条目**保留**并标 `exists=False`，界面显示为不可点；删除只由「清理失效项」显式触发 |
+
+⚠ **测试必须隔离 `TUDOU_RPGTOOL_DATA`**：这个文件的内容会直接显示在用户的
+导航栏下拉里，不隔离就会把测试用的临时游戏塞进用户的真实列表
+（`test_web_syntax.isolate_runtime()` 就是干这个的）。
 
 ### core/marshal/（⚠ 临时含两份实现）
 

@@ -4,7 +4,7 @@
 @feature  none
 @layer    ui
 @public   register_core_routes
-@depends  core.paths, core.registry, core.jobs, ui.server
+@depends  core.paths, core.registry, core.jobs, core.recent, ui.server
 @tested   tests/unit/test_server.py
 @footprint docs/MODULES.md#uiroutes
 
@@ -168,5 +168,54 @@ def register_core_routes(ctx, app=None):
         """服务端时间（前端时钟校正用）。"""
         return {"ok": True, "time": time.time(),
                 "iso": time.strftime("%Y-%m-%d %H:%M:%S")}
+
+    # ------------------------------------------------------------ 最近打开
+    #
+    # 这一组是**外壳级**能力（不属于任何功能）：导航栏的「最近打开」下拉要用，
+    # 而翻译与修改两个功能都会往里记。写在 core/recent.py，这里只做 HTTP 门面。
+    @ctx.get("/api/recent", name="recent_list")
+    def recent_list(request=None):
+        """最近打开过的游戏（新→旧）。
+
+        每项带 ``exists``（目录**现在**还在不在）—— 它是算出来的，不是存下来的，
+        所以"游戏被删了/移动了"立刻能看出来，界面据此置灰该条。
+        """
+        store = getattr(ctx, "recent", None)
+        if store is None:
+            return {"ok": True, "items": [], "limit": 0,
+                    "error": "最近打开记录不可用（运行目录不可写）"}
+        return {"ok": True, "items": store.items(), "limit": store.limit,
+                "error": store.last_error}
+
+    @ctx.post("/api/recent/forget", name="recent_forget")
+    def recent_forget(request):
+        """忘掉一条（不动文件系统上的任何东西）。"""
+        store = getattr(ctx, "recent", None)
+        if store is None:
+            return {"ok": False, "error": "最近打开记录不可用"}
+        target = request.str_arg("path")
+        if not target:
+            return {"ok": False, "error": "请提供 path"}
+        removed = store.forget(target)
+        return {"ok": True, "removed": removed, "items": store.items()}
+
+    @ctx.post("/api/recent/prune", name="recent_prune")
+    def recent_prune(request=None):
+        """清理**已失效**的条目（目录不存在了）。
+
+        刻意做成显式动作而不是自动清理：用户可能只是暂时拔了移动硬盘，
+        自动删掉会让人"插回来就找不到记录了"。
+        """
+        store = getattr(ctx, "recent", None)
+        if store is None:
+            return {"ok": False, "error": "最近打开记录不可用"}
+        return {"ok": True, "removed": store.prune(), "items": store.items()}
+
+    @ctx.post("/api/recent/clear", name="recent_clear")
+    def recent_clear(request=None):
+        store = getattr(ctx, "recent", None)
+        if store is None:
+            return {"ok": False, "error": "最近打开记录不可用"}
+        return {"ok": True, "removed": store.clear(), "items": []}
 
     return len(ctx.router.routes())

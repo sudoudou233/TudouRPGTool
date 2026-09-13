@@ -165,7 +165,7 @@
       "tested": "tests/unit/test_app.py, tests/integration/test_startup.py",
       "footprint": "docs/ARCHITECTURE.md#entry",
       "vendored": false,
-      "lines": 320
+      "lines": 327
     },
     "core/__init__.py": {
       "feature": "none",
@@ -229,12 +229,13 @@
         "Response"
       ],
       "depends": [
-        "core.paths"
+        "core.paths",
+        "core.recent"
       ],
       "tested": "tests/unit/test_registry.py",
       "footprint": "docs/MODULES.md#corecontext",
       "vendored": false,
-      "lines": 252
+      "lines": 275
     },
     "core/engines.py": {
       "feature": "none",
@@ -496,6 +497,25 @@
       "vendored": false,
       "lines": 173
     },
+    "core/recent.py": {
+      "feature": "none",
+      "layer": "core",
+      "public": [
+        "RecentGames",
+        "note_game",
+        "MAX_ITEMS",
+        "FILENAME",
+        "DEFAULT_LIMIT"
+      ],
+      "depends": [
+        "core.paths",
+        "core.safety.atomic"
+      ],
+      "tested": "tests/unit/test_recent.py",
+      "footprint": "docs/MODULES.md#corerecent",
+      "vendored": false,
+      "lines": 232
+    },
     "core/registry.py": {
       "feature": "none",
       "layer": "core",
@@ -723,7 +743,7 @@
       "tested": "tests/features/cheats/test_routes.py",
       "footprint": "docs/FEATURES.md#cheats",
       "vendored": false,
-      "lines": 1050
+      "lines": 1056
     },
     "features/selfcheck/__init__.py": {
       "feature": "selfcheck",
@@ -807,7 +827,7 @@
       "tested": "tests/features/translate/test_routes.py",
       "footprint": "docs/FEATURES.md#translate",
       "vendored": false,
-      "lines": 588
+      "lines": 595
     },
     "features/translate/session.py": {
       "feature": "translate",
@@ -926,12 +946,13 @@
         "core.paths",
         "core.registry",
         "core.jobs",
+        "core.recent",
         "ui.server"
       ],
       "tested": "tests/unit/test_server.py",
       "footprint": "docs/MODULES.md#uiroutes",
       "vendored": false,
-      "lines": 173
+      "lines": 222
     },
     "ui/server.py": {
       "feature": "none",

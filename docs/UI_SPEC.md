@@ -55,6 +55,7 @@
 | 表格 | `.table-wrap` / `table` / `th,td` / `td.num` | 粘性表头 + 横向滚动 |
 | 状态标签 | `.tag` + `.pending` / `.translated` / `.skipped` / `.error` / `.warn` / `.ok` | 条目状态 |
 | 小开关 | `.switch` / `.switch .track` / `.switch.disabled` | **显示偏好**（不是数据改动）用开关；`.check` 复选框留给"筛选条件" |
+| 下拉菜单 | `.recent-bar` / `.dropdown` / `.dropdown-menu` / `.dropdown-item` / `.dropdown-sep` / `.btn.ghost` | 外壳的「最近打开」；失效项用 `.dropdown-item.disabled` |
 | 游戏内图标 | `.icon-cell` / `.icon-cell.blank` / `.name-cell` / `.hide-icons` | IconSet 图集的 CSS sprite 单格；尺寸/偏移由页内联给出（随引擎不同） |
 | 进度条 | `.progress` / `.progress > i` | 任务进度 |
 | 模态框 | `.modal-mask` / `.modal` / `.modal h3` / `.body` / `.foot` | 二次确认与冲突选择 |
@@ -99,6 +100,8 @@
 
 页面模块契约：必须 `export function render(host, ctx)`（可为 async）。
 `host` 是已清空的容器元素；`ctx` 含 `{nav, features}`。
+可选 `export function openGame(path)` —— 外壳的「最近打开」下拉会调它
+（详见下面「外壳的『最近打开』下拉」）。
 
 ### 4.1 `translate` 页面的五张卡片（M3a 定稿）
 
@@ -180,11 +183,39 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `ui/web/index.html` | 页面骨架：#nav / #view / #toast 三个挂载点 + 功能状态表 + 诊断面板 |
-| `ui/web/app.js` | 启动引导、导航渲染、页面动态 `import()`、诊断请求 |
+| `ui/web/index.html` | 页面骨架：#nav / #recent / #view / #toast 四个挂载点 + 功能状态表 + 诊断面板 |
+| `ui/web/app.js` | 启动引导、导航渲染、「最近打开」下拉、页面动态 `import()`、诊断请求 |
 | `ui/web/tokens.css` | 设计令牌 |
 | `ui/web/components.css` | 共享组件 |
 | `ui/web/dom.js` | JS 共享工具 |
+
+#### 外壳的「最近打开」下拉（F-09）
+
+导航栏下方一条 `.recent-bar`，里面是一个 `<details class="dropdown">`：
+
+| 元素 | 行为 |
+| --- | --- |
+| `summary` | 「近 最近打开 (N)」——**N 是后端列表的长度**，不是本地缓存 |
+| 每条 | 目录名 + 引擎标签 + 「哪个功能用过」（翻译 / 改档）+ `×`（从列表移除） |
+| 点整条 | 调当前页面模块的 `openGame(path)` |
+| 目录已失效 | 加 `.disabled`、`title` 里写明"目录已不存在"、**不可点，但留在列表里** |
+| 底部 | 「清理失效项」/「全部清除」 |
+
+三条设计决定：
+
+1. **用 `<details>` 而不是自己写显隐**：原生键盘可达、无需 JS 监听点击外部，
+   少一个"点了别处菜单不关"的经典 bug。
+2. **页面模块通过 `openGame(path)` 被动调用**，不主动改外壳 —— 页面只依赖
+   `dom.js` 与 `/api`，新增功能不必改外壳（正是需求 §8-6 要的证据）。
+3. **刷新用自定义事件** `document.dispatchEvent(new CustomEvent('recent-changed'))`。
+   页面打开游戏后派发一次，外壳据此重拉 `/api/recent` 并重渲染。
+   没有这条，下拉会一直停在"还没有打开过游戏"，直到用户手动刷新页面。
+
+**页面模块契约因此扩充为**：`export function render(host, ctx)`（必需）
++ `export function openGame(path)`（**可选**；能用目录打开游戏的功能页应当导出）。
+没导出的页面被点「最近打开」时，外壳会**明确提示**"当前页面不支持从列表直接
+打开，请用页面上的「浏览…」选择目录"，而不是静默无反应 ——
+静默失败正是本工程反复踩到的那一类缺陷。
 
 ---
 

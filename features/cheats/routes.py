@@ -38,6 +38,7 @@ import time
 from core import constants
 from core import engines
 from core import iconutil
+from core import recent as recent_mod
 from core.context import Response
 from core.formats import mv_save
 from core.formats import rgss_save
@@ -141,6 +142,11 @@ class CheatsService(object):
         self.save_path = None
         self._icon_cache = None
         self.gamedata = self._load_gamedata()
+        # 记一笔"最近打开过"（两个功能共享同一份列表）。失败不影响主流程。
+        recent_mod.note_game(self.ctx, game_dir, kind="cheats",
+                             label=os.path.basename(game_dir.rstrip("\\/"))
+                             or game_dir,
+                             engine=self.engine)
         return info
 
     def _load_gamedata(self):

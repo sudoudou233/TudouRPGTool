@@ -36,7 +36,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-from core import __version__, config as config_mod, jobs as jobs_mod, paths, registry as registry_mod  # noqa: E402
+from core import __version__, config as config_mod, jobs as jobs_mod, paths, recent as recent_mod, registry as registry_mod  # noqa: E402
 from core.context import AppContext  # noqa: E402
 from ui import routes as ui_routes  # noqa: E402
 from ui import server as ui_server  # noqa: E402
@@ -59,6 +59,12 @@ class App(object):
         self.config = config_mod.AppConfig.load(config_path)
         self.jobs = jobs_mod.JobManager(max_workers=4, max_pending=64, ttl=900,
                                         id_prefix="job")
+        #: 最近打开的游戏（两个功能共享）。构造失败降级为 None ——
+        #: 记不住"最近打开过什么"不该让应用起不来（core/recent.py 有说明）。
+        try:
+            self.recent = recent_mod.RecentGames()
+        except Exception:                     # noqa: BLE001
+            self.recent = None
         self.registry = None
         self.context = None
         self.register_report = {}
@@ -72,7 +78,8 @@ class App(object):
         """发现功能模块 → 构造 ctx → 登记路由 → 调用各模块 register。"""
         self.registry = registry_mod.get_registry(features_path,
                                                  reload_modules=reload_modules)
-        self.context = AppContext(app=self, config=self.config, jobs=self.jobs)
+        self.context = AppContext(app=self, config=self.config, jobs=self.jobs,
+                                  recent=self.recent)
         self.server.router = self.context.router
 
         # 核心路由先登记（功能路由随后追加）
