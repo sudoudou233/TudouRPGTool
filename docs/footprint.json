@@ -252,7 +252,7 @@
       "tested": "tests/unit/test_engines.py",
       "footprint": "docs/MODULES.md#coreengines",
       "vendored": false,
-      "lines": 370
+      "lines": 432
     },
     "core/formats/__init__.py": {
       "feature": "none",
@@ -566,7 +566,7 @@
       "tested": "tests/compat/test_build_backup.py, tests/compat/test_m2a_regressions.py",
       "footprint": "docs/MODULES.md#coresafety",
       "vendored": false,
-      "lines": 652
+      "lines": 662
     },
     "core/safety/fontutil.py": {
       "feature": "translate",

@@ -536,7 +536,7 @@ def _build_copy(session, info, game_dir, rel_data, engine, entries_by_file,
     try:
         if progress_cb:
             progress_cb(0, 1, "正在复制游戏到暂存目录…")
-        copy_tree(game_dir, staging, progress_cb=progress_cb)
+        copied = copy_tree(game_dir, staging, progress_cb=progress_cb)
 
         fake_info = dict(info)
         fake_info["data_dir"] = os.path.join(staging, rel_data)
@@ -545,6 +545,15 @@ def _build_copy(session, info, game_dir, rel_data, engine, entries_by_file,
         stats = _apply_entries(fake_info, entries_by_file)
 
         notes = []
+        # 把"复制了哪里、复制了多少"写进结果 —— 用户报告过一次
+        # "副本里只有 www，没有 Game.exe"：当时 game_dir 被错误地定成了资源层，
+        # 而结果里**看不出复制范围**，所以没人发现。现在这句话直接出现在界面上。
+        notes.append("已复制游戏目录：%s（共 %d 个文件）"
+                     % (game_dir, copied.get("files", 0)))
+        if not os.path.isfile(os.path.join(staging, "Game.exe")):
+            notes.append("提示：这个游戏目录里没有 Game.exe。"
+                         "若副本无法启动，请确认你选的是**最外层**的游戏目录"
+                         "（含 Game.exe / nw.dll 的那一层）。")
         touched, created = [], []
         if font_path:
             notes.extend(apply_font(staging, engine, font_path,
@@ -578,7 +587,8 @@ def _build_copy(session, info, game_dir, rel_data, engine, entries_by_file,
     return {"mode": "copy", "target_dir": dst,
             "files": stats["files"], "entries": stats["entries"],
             "notes": notes, "backup_dir": None, "rollback": None,
-            "font_created": created}
+            "font_created": created, "copied_files": copied.get("files", 0),
+            "source_dir": game_dir}
 
 
 def _build_inplace(session, info, game_dir, rel_data, engine, entries_by_file,

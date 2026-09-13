@@ -5,6 +5,89 @@
 
 ---
 
+## 2026-09-13 ｜ 修复"汉化版副本只有 www、没有 Game.exe"（用户报告）
+
+### 现象
+
+用户报告：「生成的汉化版副本只有 /www 的内容啊，外层的 game.exe 之类的
+没有一起生成副本吗？」—— 副本里没有 NW.js 运行时，**根本启动不了**。
+
+### 根因：两个概念被塞进了一个字段
+
+`core/engines.py` 的 `_mvmz_info` 把 `info["game_dir"]` **直接设成了 JSON 资源根**：
+
+```python
+info = _blank_info(js_root)          # ← game_dir 被设成了 js_root
+info.update(data_dir=os.path.join(js_root, "data"), ...)
+```
+
+老版 NW.js 打包的 MV 把资源放在 `<游戏根>/www/` 下，而 `Game.exe` / `nw.dll`
+在游戏根。于是 `info["game_dir"]` 在老版布局下等于 `<游戏根>/www` —— 而
+"生成汉化版（写副本）"复制的**正是** `info["game_dir"]`。
+
+用用户游戏库里的真实游戏实测：
+
+| 游戏 | 传入 | `game_dir` 落在 | 结果 |
+| --- | --- | --- | --- |
+| `boli3/RJ01052631` | 游戏根 | `...\www` | ✗ 副本缺 Game.exe |
+| `痴女の触手 官中版` | 游戏根 | `...\www` | ✗ 副本缺 Game.exe |
+| `demon/DD_V07c_Windows` | 游戏根 | 游戏根 | ✓（所以一直没暴露） |
+
+### 为什么 880 个测试全绿却没抓到
+
+**全部既有夹具都是"新版布局"**（`js/`、`data/` 直接放在游戏根），于是
+`game_dir == js_root` 恒成立 —— 这个前提**从未被表示过，也就从未被检验**。
+
+这是"夹具比现实更整齐"造成的盲区：现实里老版 `www` 布局的 MV 游戏非常常见。
+（同一类盲区在白屏事故里也出现过 —— 那次是"夹具只是文本，从未被解析"。）
+
+### 改了什么
+
+| 文件 | 变更 |
+| --- | --- |
+| `core/engines.py` | ① `_mvmz_info(engine, game_dir, js_root)` 拆成两个参数：`game_dir` 恒为**游戏根**，新增 `js_root` 字段（数据/存档/字体都走它）。② `_rgss_info` 也补 `js_root`（RGSS 无 www 分层，两者相同）。③ 新增 `game_root_for(root)`：用户**直接选中 `www`** 时上溯到游戏根 —— 仅在父目录确实有 `*.exe`/`package.json`/`nw.dll` 时才上溯，避免把"名字恰好叫 www 的普通目录"误判。④ 新增 `game_root(info)` / `js_root(info)` 便捷访问器，`@public` 同步更新 |
+| `core/safety/builder.py` | copy 结果回传 `source_dir` 与 `copied_files`；notes 里写明「已复制游戏目录：…（共 N 个文件）」；游戏根下没有 `Game.exe` 时再给一句可操作提示 —— 这个缺陷当时**在界面上看不出复制范围**，所以表现成"成功" |
+| `tests/features/translate/test_copy_scope.py`（新，16 例） | 两种入口（游戏根 / www）× 两种布局，断言 `game_dir` / `js_root` / `data_dir` / `save_dir` 各就各位、存档仍能找到、副本含运行时与 `www`、译文写进副本、原游戏字节不变、复制范围有回报 |
+| `tests/features/translate/test_routes.py` | `make_mv_game(root, www=True)` 新增老版布局夹具（游戏根放 `Game.exe` / `package.json` / `nw.dll`） |
+
+### 怎么验证
+
+**守卫有效性**（把旧行为放回去）：注入 `_mvmz_info(engine, js_root, js_root)` 后，
+`test_copy_scope.py` 报出与用户描述**逐字一致**的失败：
+
+```text
+'Game.exe' not found in ['data', 'js', 'save'] : 副本里缺少 Game.exe
+  —— 生成的汉化版无法启动。实际内容：['data', 'js', 'save']
+```
+
+还原后 16 例全过。
+
+**真实样本实测**（在**副本**上做，原游戏一个字节不动）：
+`boli3/RJ01052631` → 扫描 45,666 条 → 写副本：
+
+```text
+副本根内容: Game.exe, Readme.TXT, credits.html, d3dcompiler_47.dll,
+            ffmpeg.dll, icudtl.dat, libEGL.dll, libGLESv2.dll,
+            locales, natives_blob.bin, node.dll, nw.dll …
+含 Game.exe: True / 含 nw.dll: True / 含 www/data: True
+已复制文件: 1535
+提示: ['已复制游戏目录：…（共 1535 个文件）']
+原游戏文件数 1535 -> 1535（未改动）
+```
+
+```powershell
+python tests/run_all.py                 # 896 例（原 880 + 16），退出码 0
+python tools/check_footprint.py         # 43 文件 / 3 功能，0 错误
+```
+
+### 教训
+
+**夹具比现实更整齐，就会漏掉现实里的分支。**
+两次用户报告的缺陷（白屏、副本不完整）都是同一形态：
+验证只覆盖了"我认为的现实"，而真实游戏的形态比我造的夹具更杂。
+
+---
+
 ## 2026-09-13 ｜ **白屏事故**：app.js 的块注释被自己提前闭合（用户报"一直加载中"）
 
 ### 现象

@@ -4,7 +4,7 @@
 @feature  none
 @layer    core
 @public   detect, detect_engine, describe, list_saves, find_save_dirs, data_dir,
-          save_dir, CONVERGENCE_STATUS
+          save_dir, game_root, js_root, game_root_for, CONVERGENCE_STATUS
 @depends  core.constants
 @tested   tests/unit/test_engines.py
 @footprint docs/MODULES.md#coreengines
@@ -172,12 +172,23 @@ def _blank_info(game_dir):
     }
 
 
-def _mvmz_info(engine, js_root):
-    """组装 MV/MZ 的 info。数据与存档目录都在同一个资源根下。"""
-    info = _blank_info(js_root)
+def _mvmz_info(engine, game_dir, js_root):
+    """组装 MV/MZ 的 info。
+
+    ⚠ ``game_dir`` 与 ``js_root`` 是**两个不同的概念**，不能混（实测踩到）：
+    老版 NW.js 打包的 MV 把资源放在 ``<游戏根>/www/`` 下，``Game.exe`` 等
+    运行时文件在**游戏根**。旧实现把 ``game_dir`` 直接设成 ``js_root``，于是
+    "生成汉化版（写副本）"复制的是 ``www`` 的内容 —— 用户拿到的副本里
+    没有 ``Game.exe``，**根本启动不了**。
+
+    现在：``game_dir`` 恒为用户指定的游戏根；``js_root`` 是 JSON 资源根
+    （数据/存档/字体/`js` 都在它下面），供数据读写与存档发现使用。
+    """
+    info = _blank_info(game_dir)
     info.update(
         engine=engine,
         label=constants.engine_label(engine),
+        js_root=js_root,
         data_dir=os.path.join(js_root, "data"),
         save_dir=os.path.join(js_root, "save"),
         ext=constants.SAVE_EXTS[engine],
@@ -189,11 +200,12 @@ def _mvmz_info(engine, js_root):
 
 
 def _rgss_info(engine, game_dir, data_dir):
-    """组装 RGSS 系 info。存档与游戏根同级。"""
+    """组装 RGSS 系 info。存档与游戏根同级（RGSS 没有 www 分层）。"""
     info = _blank_info(game_dir)
     info.update(
         engine=engine,
         label=constants.engine_label(engine),
+        js_root=game_dir,
         data_dir=data_dir,
         save_dir=game_dir,
         ext=constants.SAVE_EXTS[engine],
@@ -206,6 +218,36 @@ def _rgss_info(engine, game_dir, data_dir):
     return info
 
 
+def game_root_for(root):
+    """把一个"JSON 资源根"上溯到**游戏根**（若它确实在 ``www`` 之下）。
+
+    场景：用户可能直接选中 ``<游戏根>/www`` 那一层（资源都在眼前，看起来
+    就像游戏目录）。此时若把 ``game_dir`` 定成 ``www``，"生成汉化版"复制的是
+    ``www`` 的内容 —— 副本里没有 ``Game.exe``，**启动不了**（实测踩到）。
+
+    只在"父目录确实像一个 NW.js 游戏根"时才上溯：父目录里得有
+    ``Game.exe``/``*.exe``/``package.json``/``nw.dll`` 之一。
+    这样既修好了选 ``www`` 的情况，也不会把"名字恰好叫 www 的普通目录"
+    误当成资源根（那种情况下父目录里不会有这些文件）。
+    """
+    root = os.path.abspath(root)
+    if os.path.basename(root).lower() != "www":
+        return root
+    parent = os.path.dirname(root)
+    if not parent or not _is_dir(parent):
+        return root
+    try:
+        names = os.listdir(parent)
+    except OSError:
+        return root
+    markers = ("package.json", "nw.dll", "nw.exe")
+    for name in names:
+        low = name.lower()
+        if low.endswith(".exe") or low in markers:
+            return parent
+    return root
+
+
 def detect_engine(game_dir):
     """识别游戏目录的引擎。
 
@@ -213,6 +255,8 @@ def detect_engine(game_dir):
 
         engine      引擎标识（'mz'/'mv'/'vxace'/'vx'/'xp'/'2k3'），未识别为 None
         label       中文显示名
+        game_dir    **游戏根**的绝对路径（用户指定的那一层，含 Game.exe 等运行时）
+        js_root     JSON 资源根（MV/MZ 老版布局下是 ``<游戏根>/www``；其余同上）
         data_dir    数据目录绝对路径（未识别为 None）
         save_dir    存档目录绝对路径（未识别为 None）
         ext         存档扩展名（含点，'2k3' 为 '.lsd'）
@@ -220,7 +264,6 @@ def detect_engine(game_dir):
         layout      'json' / 'hash' / 'contents'
         supported   是否支持读写
         match       命中的判据（'js:rmmz_managers.js' / 'system.json' / ...）
-        game_dir    传入目录的绝对路径
         error       未识别或不支持时的中文原因，正常为 None
 
     目录不存在或未识别时返回 None（与 cheat tool 的 ``detect_engine`` 语义一致）；
@@ -232,16 +275,19 @@ def detect_engine(game_dir):
     if not _is_dir(game_dir):
         return None
 
+    # 用户可能直接选中 www（资源层）—— 统一上溯到真正的游戏根
+    game_dir = game_root_for(game_dir)
+
     # ---- 1) MV / MZ：先 JS 标记，再 System.json 兜底 ----
     engine, js_root = _detect_mvmz_js(game_dir)
     if engine:
-        marker = "rmmz" if engine == "mz" else "rpg"
-        return _mvmz_info(engine, js_root)
+        return _mvmz_info(engine, game_dir, js_root)
 
     system_path, data_dir = _find_system_json(game_dir)
     if system_path:
         engine = _engine_from_system(system_path) or "mz"
-        info = _mvmz_info(engine, os.path.dirname(data_dir))
+        # data_dir 是 <js_root>/data —— 往上退一层就是 js_root
+        info = _mvmz_info(engine, game_dir, os.path.dirname(data_dir))
         if not _is_dir(info["data_dir"]):
             info["data_dir"] = data_dir
         info["match"] = "system.json"
@@ -331,8 +377,13 @@ def list_saves(info, game_dir=None):
 def find_save_dirs(info, game_dir, max_depth=2):
     """搜索所有可能存放存档的目录（应对"自动存档"等第二套存档）。
 
-    返回 ``[(dir, [文件名...]), ...]``，目录已排序；只包含有存档的目录。
-    除 ``info['save_dir']`` 外，还会在游戏根下最多下探 ``max_depth`` 层。
+    返回 ``[(dir, [文件名...]), ...]``，目录已排序；只包含**真的有存档**的目录。
+
+    搜索范围是**游戏根**（``info['game_dir']``）—— 这样老版 MV 的
+    ``<根>/www/save`` 与新版 MV/MZ 的 ``<根>/save`` 都能覆盖
+    （``max_depth=2`` 正好够下探到 ``www/save``）。
+    ``info['save_dir']`` 会被预置进候选，但**空目录不会出现在返回值里**
+    （调用方若要"合法目录白名单"，用 ``save_dir(info)`` 而不是本函数）。
     """
     if not info or not info.get("engine"):
         return []
@@ -367,3 +418,14 @@ def data_dir(info):
 def save_dir(info):
     """便捷取存档目录；无则 None。"""
     return (info or {}).get("save_dir")
+
+
+def game_root(info):
+    """便捷取**游戏根**（含 Game.exe 等运行时的那一层）；无则 None。"""
+    return (info or {}).get("game_dir")
+
+
+def js_root(info):
+    """便捷取 JSON 资源根（MV/MZ 老版布局下是 ``<游戏根>/www``）。"""
+    info = info or {}
+    return info.get("js_root") or info.get("game_dir")

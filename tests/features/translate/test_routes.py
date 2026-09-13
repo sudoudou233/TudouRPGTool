@@ -74,12 +74,19 @@ def text_command(code, text):
     return {"code": code, "indent": 0, "parameters": [text]}
 
 
-def make_mv_game(root, dialogue="你好，旅行者。"):
-    """合成一个能被 ``engines.detect`` 认出的 RPG Maker MV 游戏。"""
-    write_text(os.path.join(root, "js", "rpg_core.js"), "// synthetic\n")
-    write_json(os.path.join(root, "data", "System.json"),
+def make_mv_game(root, dialogue="你好，旅行者。", www=False):
+    """合成一个能被 ``engines.detect`` 认出的 RPG Maker MV 游戏。
+
+    ``www=True`` 时用**老版 NW.js 布局**：``js/`` 与 ``data/`` 在 ``www/`` 下，
+    而 ``Game.exe`` 等运行时在**游戏根**（真实游戏里非常常见，例如
+    boli3/RJ01052631）。这个布局是"生成的汉化版只有 www、没有 Game.exe"
+    那个缺陷的现场，因此必须有一个夹具专门覆盖它。
+    """
+    web = os.path.join(root, "www") if www else root
+    write_text(os.path.join(web, "js", "rpg_core.js"), "// synthetic\n")
+    write_json(os.path.join(web, "data", "System.json"),
                {"gameTitle": "合成MV", "locale": "ja_JP"})
-    write_json(os.path.join(root, "data", "CommonEvents.json"), [
+    write_json(os.path.join(web, "data", "CommonEvents.json"), [
         None,
         {"id": 1, "name": "开场",
          "list": [text_command(101, ""),
@@ -88,12 +95,20 @@ def make_mv_game(root, dialogue="你好，旅行者。"):
                    "parameters": [["是", "否"], 1, 0]},
                   {"code": 0, "indent": 0, "parameters": []}]},
     ])
-    write_json(os.path.join(root, "data", "Items.json"), [
+    write_json(os.path.join(web, "data", "Items.json"), [
         None,
         {"id": 1, "name": "药草", "description": "恢复少量生命"},
     ])
-    write_json(os.path.join(root, "data", "MapInfos.json"),
+    write_json(os.path.join(web, "data", "MapInfos.json"),
                [None, {"id": 1, "name": "起始村"}])
+    if www:
+        # 游戏根的运行时文件 —— 副本里缺了它们就根本启动不了
+        with open(os.path.join(root, "Game.exe"), "wb") as f:
+            f.write(b"MZ\x90\x00 fake nw.js exe")
+        with open(os.path.join(root, "package.json"), "w", encoding="utf-8") as f:
+            f.write('{"name":"synthetic","main":"www/index.html"}')
+        with open(os.path.join(root, "nw.dll"), "wb") as f:
+            f.write(b"\x00" * 64)
     return root
 
 
