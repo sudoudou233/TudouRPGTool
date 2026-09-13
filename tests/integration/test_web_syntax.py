@@ -76,6 +76,14 @@ def node_exe():
     return shutil.which("node") or shutil.which("node.exe")
 
 
+def _parse_position(text):
+    """``'-128px -32px'`` -> ``(-128, -32)``（供图标 sprite 坐标断言用）。"""
+    parts = str(text).split()
+    if len(parts) != 2:
+        raise AssertionError("backgroundPosition 形状不对：%r" % text)
+    return tuple(int(p[:-2] if p.endswith("px") else p) for p in parts)
+
+
 def comment_truncations(source):
     """返回"块注释里出现通配路径拼接"的位置（行号, 命中片段）。
 
@@ -376,6 +384,137 @@ class TestWebProbe(unittest.TestCase):
         self.assertGreaterEqual(report["calls"], 6,
                                 "页面只发了 %d 次请求，看起来没在取数据"
                                 % report["calls"])
+
+
+class TestWebProbeIconFlow(unittest.TestCase):
+    """**真的驱动界面**：填目录 → 点「读取游戏数据」→ 点「载入」→ 数图标格。
+
+    为什么必须有这一层
+    ------------------
+    `/api/cheats/icon_info` 存在、`iconIndex` 读出来了，都**证明不了**
+    界面上真的画出了图标 —— 坐标算错、开关没接线、图集没解密，
+    每一条都能让"接口全绿但用户看不见图标"。
+
+    所以这里用合成游戏（自带加密图集，不依赖用户游戏库）真的点一遍界面，
+    并断言**每个图标的 CSS 坐标**。夹具的 icon 索引刻意选成"行列都不为 0"：
+
+        item  1 -> icon 20 -> 第 1 行第 4 列 -> -128px -32px
+        item  2 -> icon  0 -> 虚线空位（引擎里 0 就是"不显示图标"）
+        weapon1 -> icon  5 -> 第 0 行第 5 列 -> -160px  0px
+        armor 1 -> icon 17 -> 第 1 行第 1 列 ->  -32px -32px
+
+    行列写反、忘记乘 cell、把 0 当成有效索引，都会立刻红灯。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.node = node_exe()
+        if not cls.node:
+            raise unittest.SkipTest("未找到 node —— 前端冒烟跳过")
+        if not os.path.isfile(PROBE):
+            raise unittest.SkipTest("缺少 tools/web_probe.mjs")
+
+        import tempfile
+        from tests.features.cheats.test_item_icons import make_mv_icon_game
+
+        try:
+            cls.tmp = tempfile.TemporaryDirectory(prefix="probe_icon_",
+                                                  ignore_cleanup_errors=True)
+        except TypeError:                       # Python 3.8 / 3.9
+            cls.tmp = tempfile.TemporaryDirectory(prefix="probe_icon_")
+        cls.game_dir = os.path.join(cls.tmp.name, "game")
+        os.makedirs(cls.game_dir, exist_ok=True)
+        make_mv_icon_game(cls.game_dir)
+
+        import app as app_module
+        cls.application = app_module.App(port=0, bind="127.0.0.1")
+        cls.application.build()
+        cls.base = cls.application.start(open_browser=False).rstrip("/")
+
+        result = subprocess.run(
+            [cls.node, "--experimental-vm-modules", PROBE, cls.base, "ui/web",
+             "--json", "--game", cls.game_dir],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            cwd=_ROOT, timeout=300)
+        cls.raw = result.stdout or ""
+        cls.stderr = result.stderr or ""
+        cls.report = None
+        for line in cls.raw.splitlines():
+            line = line.strip()
+            if line.startswith("{") and line.endswith("}"):
+                try:
+                    cls.report = json.loads(line)
+                except ValueError:
+                    continue
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.application.stop()
+        cls.tmp.cleanup()
+
+    def _flow(self):
+        if self.report is None:
+            self.fail("探针没有输出可解析的报告。\nstdout:\n%s\nstderr:\n%s"
+                      % (self.raw[-2000:], self.stderr[-2000:]))
+        flow = self.report.get("iconFlow")
+        self.assertIsNotNone(flow, "探针没有报告图标流程（--game 没生效？）")
+        self.assertIsNone(flow.get("error"), "驱动界面时出错：%s" % flow.get("error"))
+        self.assertTrue(flow.get("ok"),
+                        "图标流程没走通：%s" % json.dumps(flow, ensure_ascii=False))
+        return flow
+
+    def test_toggle_is_present_enabled_and_on(self):
+        """开关必须在、可用、默认打开（用户要的就是"看到图标"）。"""
+        flow = self._flow()
+        self.assertTrue(flow["togglePresent"], "页面上没有图标开关")
+        self.assertFalse(flow["toggleDisabled"], "开关被置灰了：%s" % flow.get("hint"))
+        self.assertTrue(flow["toggleChecked"], "开关默认没打开")
+
+    def test_hint_explains_where_the_sheet_came_from(self):
+        """提示里要写清"多少格、每格多少像素、有没有解密"。"""
+        hint = self._flow().get("hint", "")
+        self.assertIn("32", hint)
+        self.assertIn("解密", hint)
+
+    def test_every_data_row_gets_an_icon_cell(self):
+        flow = self._flow()
+        self.assertEqual(flow["cells"], 4, "图标格数量不对：%s" % flow)
+        self.assertTrue(flow["cellsMatchRows"],
+                        "图标格与表格数据行没有一一对应：%s" % flow)
+
+    def test_zero_icon_index_renders_a_blank_not_a_wrong_icon(self):
+        """``iconIndex == 0`` 必须画成虚线空位，不能去裁第 0 格。"""
+        flow = self._flow()
+        self.assertEqual(flow["blankCells"], 1, "空位数不对：%s" % flow)
+        self.assertIn("没有图标", flow["blankTitles"][0])
+        self.assertEqual(flow["realCells"], 3)
+
+    def test_sprite_coordinates_are_exact(self):
+        """**坐标断言**：行列 × cell 必须分毫不差。
+
+        按**数值**比较而不是字符串：真实浏览器把 ``style.backgroundPosition``
+        读回来时会规范化（``0`` -> ``0px``），钉死字符串只会测出"浏览器怎么
+        格式化"，测不出坐标算得对不对。
+        """
+        flow = self._flow()
+        positions = sorted(_parse_position(s["pos"]) for s in flow["sample"])
+        self.assertEqual(positions, [(-160, 0), (-128, -32), (-32, -32)],
+                         "sprite 坐标算错了（行/列写反或没乘 cell）：%s"
+                         % json.dumps(flow["sample"], ensure_ascii=False))
+
+    def test_cells_use_native_pixel_size(self):
+        """按原始像素显示（像素画不缩放才不糊）。"""
+        for sample in self._flow()["sample"]:
+            self.assertEqual(sample["size"], "32pxx32px")
+            self.assertIn("/api/cheats/icon_set", sample["url"])
+
+    def test_toggling_only_swaps_a_class(self):
+        """关掉图标只是切 class —— 不能重建表格（会抖掉用户没提交的输入）。"""
+        flow = self._flow()
+        self.assertEqual(flow["hiddenClassWhenOff"], "hide-icons")
+        self.assertEqual(flow["cellsAfterToggle"], flow["cells"],
+                         "开关一关，图标格就被删了（应该是只藏不删）")
+        self.assertEqual(flow["classWhenOn"], "")
 
 
 if __name__ == "__main__":

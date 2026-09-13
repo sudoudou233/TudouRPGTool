@@ -31,6 +31,38 @@ import {
 /** 存档下拉 / 列表里显示的时间与体积 */
 const PAGE_SWITCHES = 60;
 
+/** 图标开关的持久化键（纯显示偏好，与存档内容无关） */
+const ICON_PREF_KEY = 'tudou.rpgtool.cheats.showIcons';
+
+/** 图标图集地址。
+ *
+ * ⚠ 单独提成常量而不是内联写 `url(...)`：`tests/integration/test_cheats_page.py`
+ * 会用「端点路径紧跟在引号/反引号之后」的规则扫描页面，确认**每个后端端点
+ * 都有界面入口**（防死接口）。写在 `url(/api/...)` 里它就看不见，会被报成
+ * 死接口 —— 与其放宽扫描器，不如把地址提出来（本来也是更好的写法）。 */
+const ICON_SET_URL = '/api/cheats/icon_set';
+
+/* localStorage 在 Node 冒烟探针（tools/web_probe.mjs）里不存在，隐私模式下
+   也会抛 —— 所以统一走这两个吞异常的助手。存不了只是"下次要再点一下"，
+   绝不能因此让整个页面挂掉。 */
+function loadPref(key, fallback) {
+  try {
+    if (typeof localStorage === 'undefined') return fallback;
+    const raw = localStorage.getItem(key);
+    return raw === null ? fallback : raw;
+  } catch (err) {
+    return fallback;
+  }
+}
+
+function savePref(key, value) {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(key, value);
+  } catch (err) {
+    /* 只是显示偏好，存不上不影响功能 */
+  }
+}
+
 const state = {
   game: null,
   saves: [],
@@ -40,6 +72,15 @@ const state = {
   data: { fields: [], files: [], filter: '' },
   actorAttrs: [],
   itemKinds: [],
+  party: null,
+  //: 图标图集信息（后端 /api/cheats/icon_info 的原样结果）
+  icons: { available: false, reason: '还没读取游戏数据' },
+  //: 用户**想不想**看图标（与"现在能不能看"分开存）——
+  //: 合成一个布尔量的话，"图集不可用"时被强制关掉的开关会覆盖掉用户偏好，
+  //: 换个能看到图标的游戏就莫名其妙变成关闭状态。
+  iconWant: loadPref(ICON_PREF_KEY, '1') !== '0',
+  //: 图标控件：``{box, label, hint}``
+  iconSwitch: null,
   dataHost: null,
   actorsHost: null,
   varsHost: null,
@@ -87,7 +128,9 @@ function buildDirCard() {
     }
   });
 
-  const openBtn = el('button', { class: 'btn primary', type: 'button', text: '读取游戏数据' });
+  const openBtn = el('button', {
+    class: 'btn primary', type: 'button', text: '读取游戏数据', id: 'ch-open',
+  });
   openBtn.addEventListener('click', () => openGame(dirInput.value.trim()));
 
   return el('section', { class: 'card' }, [
@@ -109,10 +152,27 @@ async function openGame(dir) {
     state.game = res.game;
     applyEngineChips(res);
     toast(`已识别：${res.summary || ''}（${res.saves} 个存档）`, 'ok', 6000);
+    // ⚠ 换了游戏必须先把上一个游戏的表格清掉：那些行里的 id/图标索引
+    // 是**上一个游戏**的数据表，配上新游戏的名字表与图集会显示成
+    // "看着像新的、其实是旧的" —— 正是本工程反复踩到的那一类缺陷。
+    clearSaveViews('已切换游戏，请重新选择存档。');
+    await loadIconInfo();
     await loadSaves();
     await loadData(false);
   } catch (err) {
     toast('读取失败：' + err.message, 'error', 12000);
+  }
+}
+
+/** 清空依赖"当前存档"的三块视图（换游戏 / 换存档时用）。 */
+function clearSaveViews(hint) {
+  state.party = null;
+  state.current = null;
+  for (const id of ['ch-items', 'ch-actors', 'ch-vars']) {
+    const host = document.getElementById(id);
+    if (!host) continue;
+    host.textContent = '';
+    if (hint) host.append(el('div', { class: 'hint', text: hint }));
   }
 }
 
@@ -180,7 +240,7 @@ async function loadSaves() {
   host.append(dirHost);
 
   const tbody = el('tbody', {});
-  for (const save of state.saves) {
+  state.saves.forEach((save, index) => {
     const current = res.current && save.path === res.current;
     tbody.append(el('tr', {}, [
       el('td', {}, [el('span', { class: 'code', text: save.name })]),
@@ -191,10 +251,13 @@ async function loadSaves() {
         ? el('span', { class: 'tag ok', text: '已载入' })
         : el('button', {
           class: 'btn sm primary', type: 'button', text: '载入',
+          // id 供前端冒烟探针真的"点一下载入"用（tests/integration/test_web_syntax.py
+          // 的 --game 流程），不是给样式用的
+          id: `ch-load-${index}`,
           onclick: () => loadSave(save.path),
         })]),
     ]));
-  }
+  });
   host.append(el('div', { class: 'table-wrap' }, [
     el('table', {}, [
       el('thead', {}, [el('tr', {}, [
@@ -377,6 +440,7 @@ function buildPartyCard() {
   const applyBtn = el('button', { class: 'btn primary', type: 'button', text: '应用数值' });
   applyBtn.addEventListener('click', () => applyParty({}));
 
+  const iconRow = buildIconSwitch();
   const itemHost = el('div', { id: 'ch-items' });
 
   return el('section', { class: 'card' }, [
@@ -388,8 +452,129 @@ function buildPartyCard() {
       field('步数', steps),
       el('div', { class: 'field' }, [el('label', { text: ' ' }), applyBtn]),
     ]),
+    iconRow,
     itemHost,
   ]);
+}
+
+/* ---------------------------------------------------------------------------
+ * 游戏内图标
+ *
+ * 为什么需要（用户报告）：有些道具的名字是乱码、纯数字或者干脆没有名字，
+ * 列表里根本认不出哪件是哪件；前面挂一个游戏内图标就一眼能对上。
+ *
+ * 数据表里本来就有 iconIndex（RGSS 是 @icon_index）—— "IconSet 里的第几格"。
+ * 后端把整张图集（必要时先解密 .rpgmvp / .png_）连同 cell/columns 一起给出，
+ * 这里用 background-position 裁出单格。不裁图、不生成小文件、零依赖。
+ * ------------------------------------------------------------------------- */
+
+function buildIconSwitch() {
+  const box = el('input', {
+    type: 'checkbox', id: 'ch-icon-toggle',
+  });
+  const label = el('label', { class: 'switch', for: 'ch-icon-toggle' }, [
+    box, el('span', { class: 'track' }), document.createTextNode('显示游戏内图标'),
+  ]);
+  const hint = el('span', { class: 'hint', id: 'ch-icon-hint' });
+  box.addEventListener('change', () => {
+    state.iconWant = box.checked;
+    savePref(ICON_PREF_KEY, box.checked ? '1' : '0');
+    syncIconVisibility();
+  });
+  state.iconSwitch = { box, label, hint };
+  applyIconAvailability();
+  return el('div', { class: 'row' }, [label, hint]);
+}
+
+/** 拉一次图集信息，决定开关是否可用、以及为什么不可用。 */
+async function loadIconInfo() {
+  try {
+    const res = await getJSON('/api/cheats/icon_info');
+    state.icons = res.icons || { available: false, reason: '接口没有返回图标信息' };
+  } catch (err) {
+    state.icons = { available: false, reason: '取图标信息失败：' + err.message };
+  }
+  applyIconAvailability();
+}
+
+function applyIconAvailability() {
+  const sw = state.iconSwitch;
+  if (!sw) return;
+  const info = state.icons || {};
+  const usable = !!info.available;
+  // 开关位置 = "用户想开" ∧ "这个游戏能开"
+  sw.box.checked = usable && state.iconWant;
+  sw.box.disabled = !usable;
+  sw.label.className = usable ? 'switch' : 'switch disabled';
+  sw.label.setAttribute('aria-disabled', usable ? 'false' : 'true');
+  if (!usable) {
+    sw.hint.textContent = info.reason || '图标不可用';
+  } else {
+    sw.hint.textContent = `图集 ${info.count} 格，每格 ${info.cell}px`
+      + (info.encrypted ? '（已从加密资源解密）' : '')
+      + '；没有图标的条目显示虚线空位。';
+  }
+  syncIconVisibility();
+}
+
+/** 只切 class，不重建表格 —— 免得抖掉用户"输了数还没点应用"的内容。 */
+function syncIconVisibility() {
+  const host = document.getElementById('ch-items');
+  if (!host) return;
+  const sw = state.iconSwitch;
+  const on = !!(sw && sw.box.checked && (state.icons || {}).available);
+  host.className = on ? '' : 'hide-icons';
+}
+
+/** 单个图标：用整张图集做 sprite，按原始像素显示（像素画不缩放才不糊）。 */
+function iconCell(index, label) {
+  const info = state.icons || {};
+  const cell = info.cell || 0;
+  const columns = info.columns || 0;
+  const count = info.count || 0;
+  const title = `${label || ''} #${index}`.trim();
+  // index 为 0 / null / 越界都画虚线空位：0 在引擎里就是"不显示图标"
+  if (!cell || !columns || !index || index < 0 || index >= count) {
+    return el('span', {
+      class: 'icon-cell blank', title: index ? `${title}（超出图集范围）` : `${label || ''} 没有图标`,
+      style: { width: `${cell || 18}px`, height: `${cell || 18}px` },
+    });
+  }
+  const col = index % columns;
+  const row = Math.floor(index / columns);
+  return el('span', {
+    class: 'icon-cell',
+    title: `${title}（第 ${row + 1} 行第 ${col + 1} 列）`,
+    style: {
+      width: `${cell}px`,
+      height: `${cell}px`,
+      backgroundImage: `url(${ICON_SET_URL})`,
+      // 第 0 行/列要写 "0" 而不是 "-0px"（CSS 等价，但输出干净、断言也锋利）
+      backgroundPosition: `${offset(col * cell)} ${offset(row * cell)}`,
+    },
+  });
+}
+
+/** sprite 偏移：0 就写 0px，其余写负像素。 */
+function offset(pixels) {
+  return pixels ? `-${pixels}px` : '0px';
+}
+
+/** 名称单元格：图标 + 名字 + id。
+ *
+ * ⚠ **无条件**生成图标格（只要图集可用），由 ``.hide-icons`` 控制显示 ——
+ * 这样开关只是切 class，不需要重画表格，用户输了数还没点「应用」的内容
+ * 不会被抖掉。图集不可用时后端不给 ``icon``，这里也就不画。 */
+function nameCell(row) {
+  const kids = [];
+  if ((state.icons || {}).available) {
+    kids.push(iconCell(row.icon, row.name));
+  }
+  kids.push(el('div', {}, [
+    el('div', { text: row.name }),
+    el('div', { class: 'hint mono', text: `#${row.id}` }),
+  ]));
+  return el('td', {}, [el('div', { class: 'name-cell' }, kids)]);
 }
 
 function field(label, control) {
@@ -398,6 +583,7 @@ function field(label, control) {
 
 function renderParty(party) {
   if (!party) return;
+  state.party = party;
   const gold = document.getElementById('ch-gold');
   const steps = document.getElementById('ch-steps');
   if (gold) gold.value = party.gold === null || party.gold === undefined ? '' : party.gold;
@@ -406,6 +592,7 @@ function renderParty(party) {
   const host = document.getElementById('ch-items');
   if (!host) return;
   host.textContent = '';
+  syncIconVisibility();
 
   if (party.party && party.party.length) {
     host.append(el('div', { class: 'row' }, [
@@ -455,10 +642,7 @@ function renderParty(party) {
           if (ev.key === 'Enter') applyParty({ [kind]: [{ id: row.id, count: input.value }] });
         });
         tbody.append(el('tr', {}, [
-          el('td', {}, [
-            el('div', { text: row.name }),
-            el('div', { class: 'hint mono', text: `#${row.id}` }),
-          ]),
+          nameCell(row),
           el('td', {}, [input]),
           el('td', {}, [el('span', {
             class: 'tag ' + (row.count ? 'translated' : 'skipped'),

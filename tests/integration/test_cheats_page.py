@@ -248,5 +248,67 @@ class TestDestructiveFlows(unittest.TestCase):
                       "发现多个存档目录时没有提醒用户（原行为，迁移对照表 B-31）")
 
 
+class TestIconToggle(unittest.TestCase):
+    """道具列表的「显示游戏内图标」开关（用户要求的新功能）。
+
+    这里只做**静态契约**检查（页面引用了正确的东西、样式类来自组件库）；
+    "真的画出来了、坐标对不对"由 ``test_web_syntax.TestWebProbeIconFlow``
+    驱动真实界面来证明 —— 两层缺一不可：静态层能指出该改哪儿，
+    执行层才能证明真的生效。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.source = read(PAGE)
+        cls.css = read(os.path.join(_ROOT, "ui", "web", "components.css"))
+
+    def test_page_asks_the_backend_for_icon_info(self):
+        self.assertIn("/api/cheats/icon_info", self.source,
+                      "页面没有询问图标图集是否可用")
+
+    def test_page_fetches_the_sheet(self):
+        self.assertIn("/api/cheats/icon_set", self.source)
+
+    def test_toggle_exists_and_is_persisted(self):
+        self.assertIn("ch-icon-toggle", self.source, "没有图标开关")
+        self.assertIn("tudou.rpgtool.cheats.showIcons", self.source,
+                      "开关的选择没有被记住（每次进页面都要重点一次）")
+
+    def test_toggle_is_disabled_when_icons_are_unavailable(self):
+        """图集解不开时要把开关置灰并说明原因，不能给一个点了没反应的开关。"""
+        self.assertIn("box.disabled", self.source)
+        self.assertIn("reason", self.source)
+
+    def test_uses_a_css_sprite_not_per_icon_files(self):
+        """贴图方式必须是 sprite（整张图 + 负偏移），不是逐个裁图。"""
+        self.assertIn("backgroundPosition", self.source)
+        self.assertIn("backgroundImage", self.source)
+        self.assertNotIn("canvas", self.source.lower(),
+                         "不该为了切图标引入 canvas")
+
+    def test_zero_icon_index_is_treated_as_blank(self):
+        """``iconIndex == 0`` 在引擎里是"不显示图标"，不能被当成第 0 格。"""
+        self.assertIn("blank", self.source)
+
+    def test_toggling_only_swaps_a_class(self):
+        """开关只切 class，不重建表格（否则会抖掉没提交的输入）。"""
+        self.assertIn("hide-icons", self.source)
+        self.assertIn("syncIconVisibility", self.source)
+
+    def test_style_classes_come_from_the_component_library(self):
+        for klass in (".switch", ".icon-cell", ".name-cell", ".hide-icons"):
+            with self.subTest(klass=klass):
+                self.assertIn(klass, self.css,
+                              "%s 没在 components.css 里定义（页面不得自定义样式）"
+                              % klass)
+
+    def test_no_inline_colour_values_in_the_new_css(self):
+        """新加的样式只能用令牌，不许写死颜色（UI_SPEC §6）。"""
+        block = self.css[self.css.find("小开关"):]
+        for pattern in (r"#[0-9a-fA-F]{3,8}\b", r"\brgba?\s*\("):
+            hits = re.findall(pattern, block)
+            self.assertEqual(hits, [], "图标/开关样式里出现硬编码颜色：%s" % hits)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

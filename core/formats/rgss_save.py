@@ -56,6 +56,9 @@ def _intval(n):
 class GameData:
     """Names/definitions read from the Data folder."""
 
+    #: 有 ``@icon_index`` 字段、且界面上会显示图标的三个表。
+    ICON_KINDS = ('items', 'weapons', 'armors')
+
     def __init__(self, datadir, standard=False):
         self.datadir = datadir
         self.standard = standard
@@ -64,6 +67,9 @@ class GameData:
         self.armors = {}
         self.actors = {}
         self.classes = {}
+        #: ``{kind: {id: iconIndex}}`` —— IconSet 图集里的格子号（0 表示不显示）。
+        #: 与 :class:`core.formats.mv_save.GameDataMV` 同构，界面只认这一个契约。
+        self.icons = {kind: {} for kind in self.ICON_KINDS}
         self._load_names()
 
     def _load_table(self, fname):
@@ -85,32 +91,37 @@ class GameData:
             return []
         return []
 
-    def _load_names(self):
-        arr = self._load_table('Items.rvdata2')
-        if arr:
-            p = arr._parser
-            for obj in arr.items:
-                if obj is None or isinstance(obj, rmarshal.NilNode):
-                    continue
-                d = {_symname(p, k): v for k, v in obj.ivars}
-                oid = _intval(d.get('@id'))
-                if oid is None:
-                    continue
-                self.items[oid] = _strval(d.get('@name'), p)
-        for fname, store in [('Weapons.rvdata2', self.weapons),
-                             ('Armors.rvdata2', self.armors)]:
-            arr = self._load_table(fname)
-            if not arr:
+    def _load_icon_table(self, fname, kind):
+        """读一张道具/武器/防具表，同时填 ``<kind>`` 与 ``icons[kind]``。
+
+        两张表一次遍历读完 —— 再走一遍 Marshal 解析是纯浪费（真实 VX Ace
+        样本的 ``Armors.rvdata2`` 有 688 条，解析不便宜）。
+        XP 的 ``RPG::Item`` 没有 ``@icon_index``，所以 ``icons[kind]`` 会是空表，
+        界面据此不显示图标（诚实降级，而不是画错格子）。
+        """
+        store = getattr(self, kind)
+        icons = self.icons[kind]
+        arr = self._load_table(fname)
+        if not arr:
+            return
+        p = arr._parser
+        for obj in arr.items:
+            if obj is None or isinstance(obj, rmarshal.NilNode):
                 continue
-            p = arr._parser
-            for obj in arr.items:
-                if obj is None or isinstance(obj, rmarshal.NilNode):
-                    continue
-                d = {_symname(p, k): v for k, v in obj.ivars}
-                oid = _intval(d.get('@id'))
-                if oid is None:
-                    continue
-                store[oid] = _strval(d.get('@name'), p)
+            d = {_symname(p, k): v for k, v in obj.ivars}
+            oid = _intval(d.get('@id'))
+            if oid is None:
+                continue
+            store[oid] = _strval(d.get('@name'), p)
+            idx = _intval(d.get('@icon_index'))
+            if idx is not None:
+                icons[oid] = idx
+
+    def _load_names(self):
+        for fname, kind in (('Items.rvdata2', 'items'),
+                            ('Weapons.rvdata2', 'weapons'),
+                            ('Armors.rvdata2', 'armors')):
+            self._load_icon_table(fname, kind)
         arr = self._load_table('Actors.rvdata2')
         if arr:
             p = arr._parser

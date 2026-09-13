@@ -4,7 +4,7 @@
 @feature  none
 @layer    core
 @public   ENGINES, ENGINE_ORDER, SAVE_PATTERNS, SAVE_CONFIG_PREFIXES, PARAMS,
-          PARAM_LABELS, engine_label
+          PARAM_LABELS, ICON_CELLS, ICON_COLUMNS, engine_label
 @depends  (stdlib only)
 @tested   tests/unit/test_config.py
 @footprint docs/MODULES.md#coreconstants
@@ -83,6 +83,21 @@ SAVE_EXTS = {
     "mz": ".rmmzsave",
     "2k3": ".lsd",
 }
+
+#: 引擎 -> 图标图集（IconSet）里**单个图标的像素边长**。
+#:
+#: 实测（真实样本，见 `docs/STATE.md`）：
+#:
+#: * MV/MZ  ``img/system/IconSet.png``      512x640 -> **32px**，16 列，20 行
+#: * VX Ace ``Graphics/System/IconSet.png``  384x1032/1272/1440 -> **24px**，16 列
+#:
+#: 两者都固定 **16 列**（见 :data:`ICON_COLUMNS`），行数由图片高度决定。
+#: 数据表里的 ``iconIndex``（RGSS 是 ``@icon_index``）就是"第几个格子"，
+#: 从 0 开始按行优先计数；**0 表示不显示图标**。
+ICON_CELLS = {"mz": 32, "mv": 32, "vxace": 24, "vx": 24, "xp": 24}
+
+#: IconSet 图集的固定列数（MV/MZ 与 RGSS 系都一样是 16）。
+ICON_COLUMNS = 16
 
 #: 角色 8 项属性加成的索引顺序（RGSS 与 MV/MZ 通用）。
 PARAMS = ("最大HP", "最大MP", "攻击", "防御", "魔攻", "魔防", "速度", "幸运")

@@ -1,22 +1,27 @@
 # 当前状态快照（STATE）
 
 > **接手本工程第一份要读的文件。** 读完本文件你就能说清"系统有哪几个功能、各自改哪里"。
-> 每个里程碑结束时更新。最后更新：**M3b 完成时**。
+> 每个里程碑结束时更新。最后更新：**M5 之后（开始加功能）**。
 
 ---
 
 ## 1. 一句话状态
 
-**M3a 与 M3b 都已完成**：两个功能的后端与前端都接通了 ——
+**M0 ～ M5 已全部交付**（需求 §8 的 8 项判据逐条落地，见 §2），
+之后按用户反馈修掉 6 个缺陷（N-23 ～ N-28），
+现在**进入"加功能"阶段**（用户明确要求：不再修 bug，往上加功能）。
+
+已交付的两个功能（后端 + 前端都接通）：
 
 * **文本翻译**：扫描 → 编辑 → 批量翻译 → 生成汉化版 → 备份还原（17 个端点 + 五张卡片）
 * **存档修改**：读档 → 改金币/道具/角色/开关变量 → 写回存档 → 数据表编辑 → 备份还原
-  （18 个端点 + 六张卡片）
+  （**21 个端点** + 六张卡片；含新加的图标两个端点）
 
-接线期间累计挖出并修掉 **6 个"静默不生效"缺陷**（N-12 ～ N-17）与 3 个安全隐患
-（分层违规、B-02 的存档侧残留、句柄泄漏）。其中 N-16/N-17 尤其阴险：
-**接口返回 `ok`，但文件其实没变**。
-**下一步：M4 UI 统一（跨页视觉审查）→ M5 验收硬化（需求 §8 的 8 项 + README + 启动器）。**
+另有第三个功能 `selfcheck`（环境自检，1 个端点）—— 它是需求 §8-6
+"扩展性"的活演示：**新增功能不改外壳一行**。
+
+**加功能阶段的候选清单在 `docs/ROADMAP.md` §5**（F-01 ～ F-09，每条都写了
+价值/落点/验收判据）。已完成的第一条是 **F-10 游戏内图标**（见 §5.1）。
 
 ---
 
@@ -31,7 +36,8 @@
 | **M3a 翻译功能接入** | ✅ **完成** | 扫描→翻译→生成汉化版→还原 全链路走通 | 17 个端点 + 五张卡片 + MV/VX Ace 端到端构建写回还原 + 真实 HTTP 烟测 |
 | **M3b 修改功能接入** | ✅ **完成** | 5 类存档读写改回读在界面走通 | 18 个端点 + 六张卡片 + MV/VX Ace 端到端改档写回还原 + 数据表编辑（34 个字段规则） |
 | **M4 UI 统一** | ✅ **完成（机械部分）** | UI 审查通过，无孤立样式 | `tests/integration/test_ui_consistency.py`（18 例）：3 个页面共 31 个类全部来自 `components.css`、无硬编码色值、令牌引用全部已定义、响应式成因已钉住；**人工走查步骤见 `docs/UI_SPEC.md` §7.1** |
-| **M5 验收硬化** | 🔄 **进行中** | 需求 §8 的 8 项全过 | ✅ 1 启动（`启动.bat` + `run.py` 实测起服务并 200）/ ✅ 2 翻译回归（4 引擎全过）/ ✅ 3 修改回归（5 格式全过）/ ✅ 4 无损性 / ✅ 5 安全性 / ✅ 6 扩展性（新增 `selfcheck` 功能，外壳零改动）/ ✅ 7 足迹（3 分钟可说清 + 校验通过）/ ✅ 8 UI（机械部分）；⬜ README 已写、待最后一遍通读；⬜ 人工走查 |
+| **M5 验收硬化** | ✅ **完成** | 需求 §8 的 8 项全过 | ✅ 1 启动 / ✅ 2 翻译回归（4 引擎）/ ✅ 3 修改回归（5 格式）/ ✅ 4 无损性 / ✅ 5 安全性 / ✅ 6 扩展性 / ✅ 7 足迹 / ✅ 8 UI（机械部分，人工走查仍待做） |
+| **加功能阶段** | 🔄 **进行中** | 按 `docs/ROADMAP.md` §5 清单往上加 | ✅ **F-10 游戏内图标**（见 §5.1）；⬜ F-09 最近打开的游戏；⬜ F-01 差异报告 … |
 
 ---
 
@@ -43,7 +49,7 @@
 | 功能 id | 用户可见名 | 界面入口 | 后端入口 | 核心实现文件 |
 | --- | --- | --- | --- | --- |
 | `translate` | 文本翻译 | `ui/web/pages/translate.js` | `features/translate/manifest.py` → `routes.register_routes` | `core/formats/mv_mz_data.py`、`core/formats/rgss_data.py`、`core/safety/builder.py`、`core/safety/backup.py`、`features/translate/translators.py` |
-| `cheats` | 存档修改 | `ui/web/pages/cheats.js` | `features/cheats/manifest.py` → `routes.register_routes` | `core/formats/mv_save.py`、`core/formats/rgss_save.py`、`features/cheats/data_fields.py`、`core/marshal/` |
+| `cheats` | 存档修改 | `ui/web/pages/cheats.js` | `features/cheats/manifest.py` → `routes.register_routes` | `core/formats/mv_save.py`、`core/formats/rgss_save.py`、`features/cheats/data_fields.py`、`core/marshal/`、`core/iconutil.py`（道具图标） |
 | `selfcheck` | 环境自检 | `ui/web/pages/selfcheck.js` | `features/selfcheck/manifest.py` → `register(ctx)`（单端点，不拆 routes） | `features/selfcheck/manifest.py`（只读，无 core 写回路径） |
 
 **跨功能的公共地基**（改这些会影响所有功能，务必先读 `docs/MODULES.md`）：
@@ -299,6 +305,44 @@ N-21（常量缺失→报告矛盾）、N-22（入口与开发环境不一致）
 而不是 `counts`）。**行为等价性要按"用户能看到/能做到什么"核对，
 而不是按"调用了哪些函数"。**
 
+---
+
+## 5.1 M5 之后：新功能（不是修 bug，按用户要求往上加）
+
+### **F-10（用户要求）**：道具/武器/防具前面显示**游戏内图标**
+
+| 项 | 内容 |
+| --- | --- |
+| 需求原话 | 「在修改工具的页面添加一个小开关，功能是将列表中可修改的物品/装甲之类的东西前添加一个对应的游戏内图标，因为有些物品基本是文本乱码、编号数字、或者干脆没名字，如果在前方加入一个小图标，那么找到相对应的物体会更简单」 |
+| 来源 | **两个参考工具都没有这个能力**（`docs/迁移对照表.md` 无对应项）—— 属于纯新增 |
+| 落点 | 新增 `core/iconutil.py`（图集定位/解密/切片几何）→ `features/cheats/routes.py`（`icon_of` / `icon_meta` / `icon_sheet` + 两个端点）→ `ui/web/pages/cheats.js`（`buildIconSwitch` / `iconCell` / `nameCell`）+ `components.css` 的 `.switch` / `.icon-cell` |
+| 关键事实 | 数据表里本来就有 `iconIndex`（RGSS 是 `@icon_index`）= "IconSet 里第几格"。所以**不需要任何图像处理**：后端给整张图 + `cell`/`columns`，界面用 CSS `background-position` 裁单格 |
+| 几何 | 用真实样本量出来：MV/MZ `512x640` → **32px / 16 列 / 20 行**；VX Ace `384x1032`、`384x1272`、`384x1248`、`384x1440` → **24px / 16 列**。都固定 16 列，行数由高度定 |
+| 加密 | MV 的 `.rpgmvp` 与 MZ 的 `.png_` 是**同一套**加壳：偏移 0..15 恒为 `RPGMV…` 伪头，偏移 16..31 = 真实 PNG 前 16 字节异或 `System.json` 的 `encryptionKey`，偏移 32.. 原样。**已用真实文件验证**：`IconSet.rpgmvp` 偏移 16..31 是 `021f4689 0310a5a5 …`，异或 key `8b4f08ce…` 后正好是 `89504e47 0d0a1a0a 0000000d 49484452`（PNG 签名 + IHDR） |
+| 守卫 | `tests/unit/test_iconutil.py`（40 例，含**真实游戏字节锚点**）、`tests/features/cheats/test_item_icons.py`（19 例）、`tests/integration/test_web_syntax.py::TestWebProbeIconFlow`（7 例，**驱动真实界面**并断言每个图标的 CSS 坐标）、`tests/integration/test_cheats_page.py::TestIconToggle`（10 例，静态契约） |
+| 实测 | 用户那个游戏（`D:\test1\wdss2`，图集是加密的 `.rpgmvp`）：页面上渲染出 **43 个图标格**（41 个真图标 + 2 个虚线空位），`icon 176 → -0px -352px`、`icon 20 → -128px -32px`，与"第 12 行第 1 列 / 第 2 行第 5 列"一致 |
+
+**这次特意避开的两个坑**（都属于"看着正常、其实错了"）：
+
+1. **换游戏后图集缓存没失效** → 会用新游戏的 `iconIndex` 去裁旧游戏的图集，
+   画出来是**另一件道具的图标**，界面上完全看不出异常。
+   修法：`open_game()` 里显式 `self._icon_cache = None`；守卫
+   `test_item_icons.TestIconCacheInvalidation`（MV 32px → VX Ace 24px）。
+2. **`iconIndex == 0` 被当成有效第 0 格** → 也会画出别的道具。
+   修法：`0` 画虚线空位；守卫同时钉住 `icon_of` 里 `0` 与 `None` 的语义差别
+   （`0` = 作者写了"不显示图标"，`None` = 这个表根本没有图标信息）。
+
+**真实边界（如实降级，不猜）**：
+
+* `D:\gamess\demon\DD_V07c_Windows`（MZ 破解版，带第三方汉化注入器
+  `TrsData.bin`）的 `IconSet.png_` 用本机 **7 个真实游戏的 key 全试过都解不开**
+  → 界面显示「图标图集已加密，解不开：用 System.json 里的 encryptionKey
+  解不开（该图集可能被第三方汉化/破解工具改过）」并**把开关置灰**，
+  其余功能完全不受影响。这条有断言（`test_real_broken_sample_raises_…`）。
+* `D:\gamess\boli\B7794\博麗霊夢は洗脳されてしまいました`（VX Ace）的
+  `Graphics/System` 是**空的**（被汉化工具剥掉了）→ 提示「找不到图标图集」，
+  同样只是置灰开关。
+
 ### 真实样本扫描基线（M3a 实测，供后续对照）
 
 | 游戏 | 引擎 | 条目数 | 对话 | 耗时 |
@@ -316,23 +360,37 @@ N-21（常量缺失→报告矛盾）、N-22（入口与开发环境不一致）
 ## 6. 当前测试状态
 
 ```powershell
-python tests/run_all.py                      # 880 例，0 失败 0 错误
+python tests/run_all.py                      # 1022 例，0 失败 0 错误
 python tests/run_all.py --quiet              # 退出码 0
-python tools/check_footprint.py --quiet      # 退出码 0（43 文件 / 3 功能）
-python app.py --check                        # 退出码 0（46 条路由）
+python tools/check_footprint.py --quiet      # 退出码 0（45 文件 / 3 功能）
+python app.py --check                        # 退出码 0（49 条路由）
 启动.bat                                     # 双击启动（等价于 python run.py）
 
 # 前端冒烟（需 Node；没装则测试自动 skip）：
 node --experimental-vm-modules tools/web_probe.mjs http://127.0.0.1:8765 ui/web
+
+# 前端冒烟 + **真的驱动修改页**（填目录 → 点读取 → 点载入 → 数图标格）
+node --experimental-vm-modules tools/web_probe.mjs http://127.0.0.1:8765 ui/web --game 'D:\test1\wdss2'
 ```
 
 | 测试层 | 用例数 | 说明 |
 | --- | --- | --- |
-| `unit/` | ~320 | 纯单元，零外部依赖（含 `test_sysdialog.py` 的 23 例） |
-| `compat/` | ~100 | 原两个工具断言的可迁移版本 + **缺陷回归**（B-02/B-03/B-10/N-07…）+ **合成 VX/XP 样本** |
-| `features/` | ~285 | 三个功能模块的自有测试（translate ~116 + cheats ~153 + selfcheck 16） |
-| `integration/` | ~99 | 端到端链路 + 零第三方依赖扫描 + 3.8 语法扫描 + 页面静态契约（43）+ **UI 统一性（18）** + **启动入口（16）** + **验收回归（17）** |
+| `unit/` | 412 | 纯单元，零外部依赖（含 `test_sysdialog.py` 的 23 例、`test_iconutil.py` 的 40 例） |
+| `compat/` | 98 | 原两个工具断言的可迁移版本 + **缺陷回归**（B-02/B-03/B-10/N-07…）+ **合成 VX/XP 样本** |
+| `features/` | 376 | 三个功能模块的自有测试（translate 132 + cheats 227 + selfcheck 17） |
+| `integration/` | 136 | 端到端链路 + 零第三方依赖扫描 + 3.8 语法扫描 + 页面静态契约 + **UI 统一性** + **启动入口（16）** + **验收回归（17）** + **前端真跑起来（18，含 7 例驱动界面数图标坐标）** |
 | `local/` | 0（待补） | 真实样本层，靠 `TUDOU_RPGTOOL_SAMPLES` 指定；样本不入库 |
+
+**F-10（游戏内图标）新增的测试重点**：
+
+* `tests/unit/test_iconutil.py`（40 例）：解密算法用**真实游戏的 32 字节 + key**
+  钉死（`021f4689…` 异或 `8b4f08ce…` 必须得到 `89504e47 0d0a1a0a…`）；
+  另有一个**真实"解不开"样本**（破解版）断言必须抛错而不是返回乱码
+* `tests/features/cheats/test_item_icons.py`（19 例）：MV/VX Ace 两套夹具，
+  含 `0` 与 `None` 的语义区分、孤儿条目不编图标、**换游戏后缓存必须失效**
+* `tests/integration/test_web_syntax.py::TestWebProbeIconFlow`（7 例）：
+  真的点界面，断言每个图标的 CSS 坐标是 `(-160,0)` / `(-128,-32)` / `(-32,-32)`
+
 
 **M3b 新增的测试重点**：
 
@@ -410,9 +468,12 @@ M4 的机械部分与 M5 的 8 项均已落地（见 §2）。剩下的是**收�
 * **长任务必须可中断** —— 用 `ctx.jobs.submit(fn)`，任务内查
   `job.token.is_cancelled()`；不给界面留点了停不下来的按钮
 * **进度回调签名** `progress_cb(done, total, message=None)`
-* **功能不得 import `ui`** —— 需要界面能力时把实现放进 `core`（M3a 的 F-09 教训）
+* **功能不得 import `ui`** —— 需要界面能力时把实现放进 `core`（M3a 的 F-09 教训；
+  M5 之后 F-10 又踩到一次，`Response` 因此搬进 `core/context.py`，见 ADR-014）
 * **写回判据看"字段在不在"，不看"值真不真"** —— `0` / `False` 是合法值（N-16 教训）
 * **两侧字段名必须对齐** —— 校验读的字段名与界面传的不一致 = 校验不存在（N-17 教训）
+* **判断"是不是加密/特殊格式"看内容，不看扩展名** —— 真实游戏里扩展名不可信
+  （N-24 的 `game_dir`、F-10 的 `.png` 里装着加壳数据，都是同一类教训）
 
 * **写回一律走 `core/safety/atomic.py`** —— 由 `tests/compat/test_m2a_regressions.py`
   的 AST 扫描强制（禁止写模式 `open`）

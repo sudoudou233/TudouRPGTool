@@ -201,9 +201,14 @@ class TestResponsiveness(unittest.TestCase):
         self.assertIn("max-width: min(", self.css,
                       "模态框没有视口上限，小窗口会溢出")
 
-    #: 有意写死尺寸的小控件（图标/徽标/数字输入框），不算"容器"
+    #: 有意写死尺寸的小控件（图标/徽标/数字输入框/开关），不算"容器"。
+    #:
+    #: 判据不是"哪个文件"而是"它会不会随内容变宽"：这些都只有几十像素、
+    #: 内部不装可变长文本，所以窄窗口下不会溢出。新增的 `.switch`
+    #: （"显示图标"小开关，34x18）属于同一类，故一并豁免。
     FIXED_SIZE_OK = (".step", "input[type=number]", "input[type=text]",
-                     ".progress", ".btn", ".tag", ".chip", ".modal")
+                     ".progress", ".btn", ".tag", ".chip", ".modal",
+                     ".switch", ".icon-cell")
 
     def test_no_fixed_pixel_width_on_containers(self):
         """除小控件与输入框外，不应对**容器**写死宽度。"""

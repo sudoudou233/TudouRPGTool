@@ -361,6 +361,9 @@ class TestRouteRegistration(unittest.TestCase):
         ("GET", "/api/cheats/backups"),
         ("POST", "/api/cheats/restore"),
         ("POST", "/api/cheats/open_dir"),
+        # 图标（用户要求的"道具前面加游戏内图标"）
+        ("GET", "/api/cheats/icon_info"),
+        ("GET", "/api/cheats/icon_set"),
     )
 
     @classmethod

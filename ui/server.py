@@ -40,19 +40,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from core import paths
 from core.context import Router
+#: ``Response`` 的**真源已搬到** ``core/context.py``（ADR-014）：功能模块要返回
+#: 二进制时得用它，而 features 层不允许 import ui 层。这里以同名再导出，
+#: 老代码 ``from ui.server import Response`` 仍然可用。
+from core.context import Response
 
 #: 允许访问的 Host 头（本机回环地址）。防 DNS rebinding / 本地网页越权。
 ALLOWED_HOSTS = ("127.0.0.1", "localhost", "[::1]")
 
-
-class Response(object):
-    """处理器返回值包装。允许处理器直接返回 dict/list/str。"""
-
-    def __init__(self, body=None, status=200, content_type=None, headers=None):
-        self.body = body
-        self.status = status
-        self.content_type = content_type
-        self.headers = headers or {}
+#: 本模块的公开面（``Response`` 是**转发**自 core.context，不是本地定义）。
+__all__ = ["JsonApiServer", "Request", "Response", "ALLOWED_HOSTS",
+           "free_port", "make_server", "start"]
 
 
 class Request(object):

@@ -50,12 +50,13 @@
       "id": "cheats",
       "name": "存档修改",
       "icon": "改",
-      "version": "0.3.0",
-      "description": "读取存档并修改金币、步数、道具/武器/防具数量、角色属性与技能、开关与变量；也能改游戏数据表（价格/攻击力/初始等级）；保存前自动备份。",
+      "version": "0.4.0",
+      "description": "读取存档并修改金币、步数、道具/武器/防具数量、角色属性与技能、开关与变量；也能改游戏数据表（价格/攻击力/初始等级）；道具列表可显示游戏内图标；保存前自动备份。",
       "order": 20,
       "core_deps": [
         "core.engines",
         "core.constants",
+        "core.iconutil",
         "core.formats.mv_save",
         "core.formats.rgss_save",
         "core.formats.mv_mz_data",
@@ -215,7 +216,7 @@
       "tested": "tests/unit/test_config.py",
       "footprint": "docs/MODULES.md#coreconstants",
       "vendored": false,
-      "lines": 109
+      "lines": 124
     },
     "core/context.py": {
       "feature": "none",
@@ -224,7 +225,8 @@
         "Router",
         "Route",
         "PageSpec",
-        "AppContext"
+        "AppContext",
+        "Response"
       ],
       "depends": [
         "core.paths"
@@ -232,7 +234,7 @@
       "tested": "tests/unit/test_registry.py",
       "footprint": "docs/MODULES.md#corecontext",
       "vendored": false,
-      "lines": 228
+      "lines": 252
     },
     "core/engines.py": {
       "feature": "none",
@@ -344,7 +346,7 @@
       "footprint": "docs/MODULES.md#coreformats",
       "vendored": true,
       "note": "vendored：来自 rpgmaker_cheating_tool/mvdata.py。 M2b 已把 JSON / 压缩 / JsonEx 元数据约定收敛到 core/formats/jsoncodec.py（与 mv_mz_data 共用一份实现）， 本文件只保留\"改哪个键、怎么改\"的业务规则。 **M3b 修复 B-02 残留**：save() 原先直接 ``open(path, 'wb')``， 写一半中断就把用户存档毁了 —— 现在走 core.safety.atomic。",
-      "lines": 293
+      "lines": 319
     },
     "core/formats/rgss_data.py": {
       "feature": "translate",
@@ -381,7 +383,26 @@
       "footprint": "docs/MODULES.md#coreformats",
       "vendored": true,
       "note": "vendored：来自 rpgmaker_cheating_tool/rpgdata.py。 **M3b 修复两处**： 1) B-02 残留：save() 原先直接 ``open(path, 'wb')`` → 改原子写； 2) 句柄泄漏：``open(path,'rb').read()`` 依赖 GC 关闭文件 （Windows 上会让后续替换/删除失败）→ 改 ``with`` 语句。",
-      "lines": 615
+      "lines": 626
+    },
+    "core/iconutil.py": {
+      "feature": "none",
+      "layer": "core",
+      "public": [
+        "MV_HEADER",
+        "PNG_HEADER",
+        "decrypt_image",
+        "encryption_key",
+        "find_sheet"
+      ],
+      "depends": [
+        "core.constants",
+        "core.engines"
+      ],
+      "tested": "tests/unit/test_iconutil.py",
+      "footprint": "docs/MODULES.md#coreiconutil",
+      "vendored": false,
+      "lines": 282
     },
     "core/jobs.py": {
       "feature": "none",
@@ -675,6 +696,7 @@
       ],
       "depends": [
         "core.engines",
+        "core.iconutil",
         "core.formats.mv_save",
         "core.formats.rgss_save",
         "core.safety"
@@ -682,7 +704,7 @@
       "tested": "tests/features/cheats/",
       "footprint": "docs/FEATURES.md#cheats",
       "vendored": false,
-      "lines": 111
+      "lines": 112
     },
     "features/cheats/routes.py": {
       "feature": "cheats",
@@ -701,7 +723,7 @@
       "tested": "tests/features/cheats/test_routes.py",
       "footprint": "docs/FEATURES.md#cheats",
       "vendored": false,
-      "lines": 960
+      "lines": 1050
     },
     "features/selfcheck/__init__.py": {
       "feature": "selfcheck",
@@ -930,7 +952,7 @@
       "tested": "tests/unit/test_server.py",
       "footprint": "docs/MODULES.md#uiserver",
       "vendored": false,
-      "lines": 447
+      "lines": 445
     }
   },
   "documents": {

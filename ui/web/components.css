@@ -6,6 +6,7 @@
  * @public   .btn .card .row .field .grid .check .chips .chip .table-wrap table
  *           .tag .progress .modal-mask .modal #toast .muted .error-text
  *           .hint .pager .nav .nav-item .kpi .empty .code
+ *           .switch .icon-cell .name-cell .hide-icons
  * @depends  tokens.css
  * @tested   tools/check_footprint.py（检查页面是否引入了未登记的自定义样式）
  * @footprint docs/UI_SPEC.md#components
@@ -95,6 +96,94 @@ main {
   font-size: var(--fs-sm);
   cursor: pointer;
 }
+
+/* ------------------------------------------------------------ 小开关 */
+/* 用于"显示图标"这类**纯显示偏好**：改的是看法，不是数据，所以用开关
+   而不是复选框 —— 复选框在这个界面里已经表示"筛选条件"(.check)。 */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  user-select: none;
+}
+.switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  margin: 0;
+}
+.switch .track {
+  flex: 0 0 auto;
+  position: relative;
+  width: 34px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  background: var(--input-bg);
+  border: 1px solid var(--line);
+  transition: background .15s ease, border-color .15s ease;
+}
+.switch .track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform .15s ease, background .15s ease;
+}
+.switch input:checked + .track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.switch input:checked + .track::after {
+  transform: translateX(16px);
+  background: var(--on-accent);
+}
+.switch input:focus-visible + .track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.switch.disabled,
+.switch input:disabled + .track {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+/* ---------------------------------------------------------------- 图标 */
+/* 游戏内图标：不裁图、不生成小文件 —— 拿整张 IconSet 做 CSS sprite。
+   尺寸与偏移由页内联给出（每 个引擎的 cell 不同：MV/MZ 32px，VX/Ace 24px）。
+
+   ⚠ 刻意**按原始像素显示**（不留缩放）：图标是像素画，缩放会糊，
+   而 32px 的行高在表格里完全可以接受。 */
+.icon-cell {
+  display: inline-block;
+  flex: 0 0 auto;
+  vertical-align: middle;
+  background-repeat: no-repeat;
+  background-color: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+/* 没有图标（数据表写的就是 0）与"图集里没这一格"：虚线框，一眼能区分 */
+.icon-cell.blank {
+  border-style: dashed;
+  background-image: none !important;
+}
+/* 名字 + 图标一行 */
+.name-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+/* 关掉图标时不重建表格，只是藏起来 —— 这样用户"输了数还没点应用"
+   的内容不会被一次开关抖动清掉。 */
+.hide-icons .icon-cell { display: none; }
 
 /* ---------------------------------------------------------------- 导航 */
 .nav {

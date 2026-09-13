@@ -3,7 +3,7 @@
 
 @feature  none
 @layer    core
-@public   Router, Route, PageSpec, AppContext
+@public   Router, Route, PageSpec, AppContext, Response
 @depends  core.paths
 @tested   tests/unit/test_registry.py
 @footprint docs/MODULES.md#corecontext
@@ -18,6 +18,16 @@ app 或 server 内部**。``ctx`` 只暴露三件事：
 * :attr:`AppContext.paths` —— 只读路径访问器
 
 路由与页面的登记都只是"往表里加一行"，所以新增功能是"插一块"而不是"改一片"。
+
+``Response`` 为什么在这里（ADR-014）
+-----------------------------------
+它原先定义在 ``ui/server.py``。要返回**二进制**（图标图集那张 PNG）时，
+``features`` 层的处理器就必须 ``import ui.server`` —— 于是 features 反过来
+依赖了 HTTP 传输层，正好和"``ui`` → ``features``"的方向对撞。
+
+它不是"HTTP 的东西"，而是**处理器返回值的契约**，和 :class:`Router` /
+:class:`PageSpec` 是一家人，所以搬到本模块。``ui/server.py`` 仍以同名导出它
+（历史 import 不受影响），并且仍然是**只有它**真正把 ``Response`` 写上网。
 """
 
 from __future__ import annotations
@@ -25,6 +35,20 @@ from __future__ import annotations
 import re
 
 from . import paths
+
+
+class Response(object):
+    """处理器返回值包装。允许处理器直接返回 dict/list/str/bytes。
+
+    ``body`` 是 ``bytes`` 时会**原样**发送，``content_type`` 必须显式给出
+    （例如图标图集的 ``image/png``）—— 见 ``ui/server.py`` 的 ``_send``。
+    """
+
+    def __init__(self, body=None, status=200, content_type=None, headers=None):
+        self.body = body
+        self.status = status
+        self.content_type = content_type
+        self.headers = headers or {}
 
 
 class Route(object):

@@ -25,6 +25,9 @@
 | 翻译功能的接口要改 | `features/translate/routes.py`（接口清单在 `test_routes.py::EXPECTED`） |
 | "生成汉化版"没写进译文 | 先查 `mv_mz_data._set_by_path` / `rgss_data._navigate` 的**路径约定**（N-15、N-07 都出在这里） |
 | 选游戏/选字体的对话框弹不出来 | `core/sysdialog.py`（B-27） |
+| 道具/武器/防具前面要显示游戏内图标 | `core/iconutil.py`（图集定位+解密+切片几何）→ `features/cheats/routes.py` 的 `icon_of`/`icon_meta`/`icon_sheet` → `ui/web/pages/cheats.js` 的 `iconCell` |
+| 图标画出来了但位置不对 / 画的是别的道具 | 先查 `cell` 与 `columns`：MV/MZ **32px**、VX Ace **24px**，都是 16 列（`core/constants.py` 的 `ICON_CELLS`）；再查换游戏后 `_icon_cache` 有没有失效（N-29） |
+| 图标全是空格子 / 开关是灰的 | `icon_info` 的 `reason` 就是答案：没图集 / 解不开 / 尺寸不认识，三种都如实说明 |
 | 界面样式不统一 | `ui/web/tokens.css` + `components.css` + `docs/UI_SPEC.md` |
 | 新增一个页面 | `features/<name>/manifest.py` 里加 `pages` 一条 + 新建 `ui/web/pages/<id>.js` |
 | 足迹校验报错 | `tools/check_footprint.py`（12 条规则见文件头 RULES） |
@@ -135,6 +138,43 @@
 不起进程），所以"B-27 的修复"本身可以被 CI 完整断言；真正弹窗的 `pick()`
 只在有图形环境的机器上执行。降级契约（两者都不可用 → `DialogUnavailable`）
 由 `tests/unit/test_sysdialog.py` 钉死。
+
+### core/iconutil.py
+
+| 项 | 内容 |
+| --- | --- |
+| 职责 | 游戏内图标图集（IconSet）的**定位 / 解密 / 切片几何**；不做任何图像解码或编码 |
+| 公开 API | `find_sheet()`、`encryption_key()`、`decrypt_image()`、`png_size()`、`geometry()`、`load()`、`MV_HEADER`、`PNG_HEADER` |
+| 谁调用 | `features/cheats/routes.py` 的 `CheatsService.icon_meta()` / `icon_sheet()` |
+| 改动影响 | 只影响"道具列表前面的小图标"；不参与写盘、不参与存档读写 |
+| 测试 | `tests/unit/test_iconutil.py`（40 例）、`tests/features/cheats/test_item_icons.py`（19 例）、`tests/integration/test_web_syntax.py::TestWebProbeIconFlow`（7 例，驱动真实界面） |
+| 来源 | **两个参考工具都没有这个能力**（新功能，无迁移对应项） |
+
+**为什么不需要任何图像处理**：数据表里本来就有 `iconIndex`（RGSS 是
+`@icon_index`）—— 它就是"IconSet 图集里的第几格"。所以本模块只负责
+**给出整张图 + 每格边长 + 每行几格**，由浏览器用 CSS `background-position`
+裁出单格。零依赖、零编码，也不用把图集拆成一堆小文件。
+
+**加密格式**（用真实样本实测确认，见 `docs/STATE.md` §5 N-29）：
+MV 的 `.rpgmvp` 与 MZ 的 `.png_` 是同一套加壳 —— 偏移 0..15 恒为
+`52 50 47 4D 56 …` 伪头，偏移 16..31 是真实 PNG 前 16 字节逐字节异或
+`System.json` 里的 `encryptionKey`，偏移 32.. 原样。
+
+**设计上的两个刻意选择**：
+
+1. **按内容而不是按扩展名判断是否加密**。真实游戏里存在被汉化/破解工具
+   改名或重新打包的资源，扩展名不可信（与 `mv_save.SaveFileMV` 的
+   "内容优先于参数"同一原则）。
+2. **解不开就如实报错，绝不返回半成品**。解不开时 `load()` 的
+   `available=False` 且 `reason` 是给用户看的中文原因；界面据此把开关
+   置灰并说明。实测 `D:\gamess\demon\DD_V07c_Windows` 的 `IconSet.png_`
+   被第三方汉化注入器改过，本机 7 个真实游戏的 key 全试过都解不开 ——
+   这种游戏必须优雅降级，而不是画出 320 个错位的图。
+
+⚠ **切换游戏时必须清 `CheatsService._icon_cache`**（`open_game` 里显式清空）。
+不清就会出现"新游戏的道具名配旧游戏的图集"，画出来是**另一件道具的图标**，
+看着还挺正常 —— 与 N-12～N-28 是同一类缺陷，有专门断言守着
+（`test_item_icons.TestIconCacheInvalidation`）。
 
 ### core/marshal/（⚠ 临时含两份实现）
 

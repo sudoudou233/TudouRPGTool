@@ -102,16 +102,16 @@
 | 功能 id | `cheats` |
 | 用户可见名称 | 存档修改 |
 | 图标 | 改 |
-| 版本 | 0.3.0 |
-| 状态 | **已完成（M3b）** |
+| 版本 | 0.4.0 |
+| 状态 | **已完成（M3b）**；M5 之后按用户要求加了**游戏内图标**（见下面 §图标） |
 | 界面入口 | 导航项「存档修改」→ `ui/web/pages/cheats.js` |
 | 后端入口 | `features/cheats/manifest.py` → `register(ctx)` → `routes.register_routes()` |
 | API 前缀 | `/api/cheats` |
 | 声明的页面 | `{id: cheats, title: 存档修改, module: cheats, order: 20}` |
-| 断言测试 | `tests/features/cheats/test_manifest.py`、`test_routes.py`、`test_writeback_regressions.py` |
+| 断言测试 | `tests/features/cheats/test_manifest.py`、`test_routes.py`、`test_writeback_regressions.py`、`test_item_catalog.py`、`test_item_icons.py` |
 | 验证命令 | `python tests/run_all.py --suite features` |
 
-**已注册的 API 路由**（18 条；清单由
+**已注册的 API 路由**（21 条；清单由
 `test_routes.py::TestRouteRegistration.EXPECTED` **双向**核对）
 
 | 方法 | 路径 | 作用 |
@@ -122,8 +122,11 @@
 | POST | `/api/cheats/pick_folder` | 原生文件夹对话框 |
 | GET | `/api/cheats/saves` | 存档列表（名称/时间/大小/目录）+ 当前存档 + 备份数 |
 | POST | `/api/cheats/load` | 打开存档（**路径必须在本游戏存档目录内**） |
-| GET | `/api/cheats/party` | 金币 / 步数 / 队伍成员 / 三个道具桶（带可读名字） |
+| GET | `/api/cheats/find_saves` | 兜底搜索：按扩展名全盘找存档（标准目录搜不到时用，N-27） |
+| GET | `/api/cheats/party` | 金币 / 步数 / 队伍成员 / 三个道具桶（带可读名字 + **图标索引**） |
 | GET | `/api/cheats/actors` | 角色数组 + 可编辑属性清单 |
+| GET | `/api/cheats/icon_info` | 图标图集能否使用、怎么切（`cell`/`columns`/`rows`/`count`，N-29） |
+| GET | `/api/cheats/icon_set` | 图标图集的**明文 PNG**（`.rpgmvp`/`.png_` 会先解密；**不接受路径参数**） |
 | GET | `/api/cheats/vars` | 开关 / 变量分页读取 |
 | POST | `/api/cheats/party` | 改金币/步数/道具数量（**只改内存**） |
 | POST | `/api/cheats/actor` | 改角色属性 / 技能列表（**只改内存**） |
@@ -148,17 +151,41 @@
 
 **依赖的 core 能力**（manifest 的 `core_deps`）
 
-`core.engines`、`core.constants`、`core.formats.mv_save`、`core.formats.rgss_save`、
-`core.formats.mv_mz_data`、`core.formats.rgss_data`、`core.formats.lzstring`、
-`core.marshal.doc_model`、`core.marshal.value_layer`、`core.safety.atomic`、
-`core.safety.backup`
+`core.engines`、`core.constants`、`core.iconutil`、`core.formats.mv_save`、
+`core.formats.rgss_save`、`core.formats.mv_mz_data`、`core.formats.rgss_data`、
+`core.formats.lzstring`、`core.marshal.doc_model`、`core.marshal.value_layer`、
+`core.safety.atomic`、`core.safety.backup`
+
+### 图标（`/icon_info` + `/icon_set`）
+
+**用户要求**：道具/武器/防具列表前面加一个游戏内图标 ——
+"有些物品基本是文本乱码、编号数字、或者干脆没名字"。
+
+数据表里本来就有 `iconIndex`（RGSS 是 `@icon_index`）= "IconSet 里第几格"，
+所以**不需要任何图像处理**：
+
+| 步骤 | 谁做 |
+| --- | --- |
+| 定位图集（`img/system/IconSet.png` 或 `Graphics/System/IconSet.png`） | `core/iconutil.find_sheet()` |
+| 需要时解密（MV `.rpgmvp` / MZ `.png_`） | `core/iconutil.decrypt_image()`，key 来自 `System.json` |
+| 算切片参数（cell/columns/rows/count） | `core/iconutil.geometry()` |
+| 画单格（CSS `background-position`） | `ui/web/pages/cheats.js` 的 `iconCell()` |
+
+**三条不变量**：
+
+1. **`icon_set` 不接受任何路径参数** —— 图集位置只由当前会话的引擎与游戏目录
+   推出，因此这个端点**不存在路径穿越面**（有断言：传 `path=` 也拿不到外部文件）。
+2. **解不开就如实报错** —— `available: false` + 中文 `reason`，界面据此把开关
+   置灰。绝不返回半成品字节（否则会画出 320 个错位的图）。
+3. **换游戏必须让图集缓存失效** —— `open_game()` 里清 `_icon_cache`；否则会用
+   新游戏的索引去裁旧游戏的图集，画出来是**另一件道具的图标**。
 
 **实现文件**
 
 | 文件 | 角色 |
 | --- | --- |
 | `features/cheats/manifest.py` | 自描述与注册（**薄壳**：构造服务 + 声明页面） |
-| `features/cheats/routes.py` | **后端接线**：18 个端点 + `CheatsService` + `BackupPolicy`（M3b） |
+| `features/cheats/routes.py` | **后端接线**：21 个端点 + `CheatsService` + `BackupPolicy`（M3b；图标端点 M5 后加） |
 | `features/cheats/data_fields.py` | **可编辑字段的唯一规则表** + 扫描 / 陈旧性校验 / 写回编排 |
 | `core/engines.py` | 引擎识别 + 存档发现（与 translate 共用） |
 | `core/formats/mv_save.py` | MV/MZ 存档读写（LZString / zlib；**原子写**） |
@@ -166,6 +193,7 @@
 | `core/formats/mv_mz_data.py` | MV/MZ 数据表写回（数据表编辑复用翻译那条编排） |
 | `core/formats/rgss_data.py` | RGSS 数据表写回（含 `_set_scalar` 类型跟随） |
 | `core/marshal/doc_model.py` | Ruby Marshal 字节级保真 |
+| `core/iconutil.py` | 图标图集的定位 / 解密 / 切片几何（F-10 新增） |
 | `core/safety/atomic.py`、`backup.py` | 原子写回 + 自动备份 + 清单还原 |
 | `ui/web/pages/cheats.js` | 前端页面（六张卡片） |
 

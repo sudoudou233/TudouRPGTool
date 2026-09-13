@@ -6,8 +6,8 @@
 @public   CheatsService, register_routes, BackupPolicy, ACTOR_ATTRS,
           EDIT_KINDS, PAID_FOR
 @depends  features.cheats.data_fields, core.engines, core.formats.mv_save,
-          core.formats.rgss_save, core.safety.backup, core.safety.atomic,
-          core.paths, core.constants
+          core.formats.rgss_save, core.iconutil, core.safety.backup,
+          core.safety.atomic, core.paths, core.constants, core.context
 @tested   tests/features/cheats/test_routes.py
 @footprint docs/FEATURES.md#cheats
 
@@ -37,6 +37,8 @@ import time
 
 from core import constants
 from core import engines
+from core import iconutil
+from core.context import Response
 from core.formats import mv_save
 from core.formats import rgss_save
 from core.safety import backup as backup_mod
@@ -114,6 +116,13 @@ class CheatsService(object):
         self.save = None             # 当前打开的存档编辑器
         self.save_path = None
         self.engine = None
+        #: 图标图集缓存 ``(meta, png_bytes)``。
+        #:
+        #: ⚠ **切换游戏时必须失效** —— 否则换一个游戏后界面上画的还是上一个
+        #: 游戏的图标。这类"接口说成功、画面是旧的"正是本工程反复踩到的一类
+        #: 缺陷（N-12 ～ N-28），所以在 :meth:`open_game` 里显式清空，
+        #: 并且有断言守着（``test_icon_cache_is_invalidated_on_open``）。
+        self._icon_cache = None
 
     # ------------------------------------------------------------ 打开游戏
     def open_game(self, game_dir):
@@ -130,6 +139,7 @@ class CheatsService(object):
         self.engine = info["engine"]
         self.save = None
         self.save_path = None
+        self._icon_cache = None
         self.gamedata = self._load_gamedata()
         return info
 
@@ -152,6 +162,56 @@ class CheatsService(object):
         if self.save is None:
             raise ValueError("请先选择一个存档")
         return self.save
+
+    # ------------------------------------------------------------ 图标
+    def icon_of(self, kind, item_id):
+        """取某条目的图标格子号；没有图标信息返回 None。
+
+        ⚠ ``0`` 与 ``None`` 语义不同，不要合并：
+
+        * ``0``    —— 数据表**明确写了**"这件道具不显示图标"；
+        * ``None`` —— 这个表/这条**根本没有**图标信息（XP 的 ``RPG::Item``
+          没有 ``@icon_index``、或 data 文件读失败）。
+
+        两者界面都不画图标，但前端要能区分"没图标"和"后端不支持图标"，
+        所以这里原样返回 int（含 0），不转成 falsy。
+        """
+        icons = getattr(self.gamedata, "icons", None)
+        if not isinstance(icons, dict):
+            return None
+        bucket = icons.get(kind)
+        if not isinstance(bucket, dict):
+            return None
+        value = bucket.get(item_id)
+        return value if isinstance(value, int) else None
+
+    def icon_meta(self, refresh=False):
+        """图标图集的切片元数据（**不含图片字节**，可直接进 JSON）。
+
+        返回 ``available`` / ``reason`` / ``cell`` / ``columns`` / ``rows`` /
+        ``count`` / ``encrypted`` / ``path``。不可用时 ``reason`` 是给用户看的
+        中文原因，界面据此把"显示图标"开关置灰并说明为什么。
+        """
+        if self.info is None:
+            return {"available": False, "reason": "还没有打开游戏",
+                    "engine": None, "path": None, "encrypted": False,
+                    "width": None, "height": None, "cell": None,
+                    "columns": None, "rows": None, "count": None}
+        if refresh or self._icon_cache is None:
+            self._icon_cache = iconutil.load(self.info)
+        meta, _data = self._icon_cache
+        return dict(meta)
+
+    def icon_sheet(self):
+        """图标图集的**明文 PNG 字节**（界面拿它做 CSS sprite）。
+
+        返回 ``(png_bytes, meta)``；不可用时 ``png_bytes`` 为 None。
+        """
+        meta = self.icon_meta()
+        if not meta.get("available"):
+            return None, meta
+        _meta, data = self._icon_cache
+        return data, meta
 
     # ------------------------------------------------------------ 存档列表
     def list_saves(self):
@@ -341,6 +401,7 @@ class CheatsService(object):
                 "name": name or "#%d" % item_id,
                 "count": count,
                 "owned": bool(count),
+                "icon": self.icon_of(kind, item_id),
             })
         # 存档里有、但数据表里没有的 id（MOD / 数据表被换过）也要列出来，
         # 否则用户会在界面上"看不到自己背包里的东西"
@@ -350,7 +411,9 @@ class CheatsService(object):
             name = _name_of(store.get(item_id), item_id) if item_id in store else ""
             rows.append({"id": item_id, "name": name or "#%d" % item_id,
                          "count": count, "owned": bool(count),
-                         "orphan": item_id not in store})
+                         "orphan": item_id not in store,
+                         "icon": self.icon_of(kind, item_id) if item_id in store
+                         else None})
         rows.sort(key=lambda r: (r["id"] is None, r["id"]))
         _ = save
         return rows
@@ -386,7 +449,7 @@ class CheatsService(object):
                     name = _name_of(store.get(item_id), item_id) \
                         if item_id in store else ""
                 rows.append({"id": item_id, "name": name or "#%d" % item_id,
-                             "count": count})
+                             "count": count, "icon": self.icon_of(kind, item_id)})
             view["items"][kind] = rows
             view["catalog"][kind] = self.catalog(kind, bucket)
         return view
@@ -515,7 +578,7 @@ def register_routes(ctx, service):
         return {
             "ok": True,
             "feature": "cheats",
-            "version": "0.3.0",
+            "version": "0.4.0",
             "backup_policy": PAID_FOR,
             "actor_attrs": [dict(a) for a in ACTOR_ATTRS],
             "item_kinds": list(EDIT_KINDS),
@@ -709,6 +772,33 @@ def register_routes(ctx, service):
                     "attrs": [dict(a) for a in ACTOR_ATTRS]}
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
+
+    # ------------------------------------------------------------------ 图标
+    @ctx.get("/api/cheats/icon_info", name="cheats_icon_info")
+    def cheats_icon_info(request=None):
+        """图标图集能不能用、怎么切片（``cell``/``columns``/``rows``/``count``）。
+
+        不给图片字节 —— 界面先问这个决定"显示图标"开关是否可用，
+        再用下面那个端点取图。不可用时 ``icons.reason`` 说明原因。
+        """
+        return {"ok": True, "icons": service.icon_meta()}
+
+    @ctx.get("/api/cheats/icon_set", name="cheats_icon_set")
+    def cheats_icon_set(request=None):
+        """图标图集的**明文 PNG**（``.rpgmvp`` / ``.png_`` 会先解密）。
+
+        ⚠ **不接受任何路径参数**，图集位置完全由当前会话的引擎与游戏目录推出 ——
+        这样这个端点不存在路径穿越面（对比 ``serve_static`` 需要显式防穿越）。
+
+        界面拿到的是一整张图 + ``cell``/``columns``，用 CSS ``background-position``
+        裁出单个图标；不需要任何图像处理，也不需要把图集拆成一堆小文件。
+        """
+        data, meta = service.icon_sheet()
+        if data is None:
+            return {"ok": False,
+                    "error": meta.get("reason") or "图标图集不可用",
+                    "icons": meta}
+        return Response(body=data, status=200, content_type="image/png")
 
     @ctx.get("/api/cheats/vars", name="cheats_vars")
     def cheats_vars(request):

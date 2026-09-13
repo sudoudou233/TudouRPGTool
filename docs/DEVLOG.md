@@ -5,6 +5,155 @@
 
 ---
 
+## 2026-09-13 ｜ 加功能阶段开工：道具/武器/防具前面显示**游戏内图标**（F-10）
+
+### 背景：用户要求"加功能，不再修 bug"
+
+> 保存当前分支，我想添加更多功能而不是修 bug 了
+
+先把 M0 ～ M5 归档（`d32948d`）、打还原点 tag `v0.1.0`、开分支
+`feature/more-tools`，然后把 `docs/ROADMAP.md` §5 从"想法池"改写成带
+**价值 / 落点 / 验收判据**的工作清单。用户从清单里选了 F-09（最近打开的
+游戏），并**另外提了一条清单外的需求**：
+
+> 在修改工具的页面添加一个小开关，功能是将列表中可修改的物品/装甲之类的
+> 东西前添加一个对应的游戏内图标，因为有些物品基本是文本乱码、编号数字、
+> 或者干脆没名字，如果在前方加入一个小图标，那么找到相对应的物体会更简单
+
+### 为什么这条需求是真的（不是"锦上添花"）
+
+用户那个游戏（`D:\test1\wdss2`）实测：35 件道具里有 2 件 `iconIndex == 0`，
+名字分别是 **`啊啊啊啊`** 和占位符 **`#35`** —— 正是用户描述的场景。
+**图标是唯一能分辨它们的线索。**
+
+### 关键发现：不需要任何图像处理
+
+数据表里本来就有 `iconIndex`（RGSS 是 `@icon_index`）—— 它就是
+"IconSet 图集里的第几格"。于是方案变得极简：
+
+1. 后端给**整张图**（必要时先解密）+ `cell` / `columns`；
+2. 前端用 CSS `background-position` 裁出单格。
+
+零依赖、零图像编解码、不用把图集拆成一堆小文件。
+
+### 几何与加密格式（都用真实样本量出来，不靠记忆）
+
+先扫了 `D:\gamess` 下 14 个真实图集，量出**两种 cell**：
+
+| 引擎 | 图集路径 | 真实尺寸 | 结论 |
+| --- | --- | --- | --- |
+| MV / MZ | `img/system/IconSet.png` | 512×640 | **32px / 16 列 / 20 行** |
+| VX / VX Ace | `Graphics/System/IconSet.png` | 384×1032、384×1272、384×1248、384×1440 | **24px / 16 列**（行数随高度变） |
+
+⚠ **384×1248 用 24 和 32 都能整除** —— 选错就是"12 列 468 格"这种
+**看着挺合理**的错误布局。所以 `geometry()` 优先引擎标准值，并且
+`test_vxace_prefers_24_over_32` 专门钉住这一条。
+
+加密格式（MV `.rpgmvp` 与 MZ `.png_` **是同一套**）用真实文件反推确认：
+
+```
+偏移  0..15   52 50 47 4D 56 00 00 00 00 03 01 00 00 00 00 00   ← RPGMV 伪头
+偏移 16..31   02 1F 46 89 03 10 A5 A5 43 89 7B 0F B6 2A D3 3D
+  XOR System.json 的 encryptionKey 8b4f08ce0e1abfaf43897b02ff62976f
+            = 89 50 4E 47 0D 0A 1A 0A 00 00 00 0D 49 48 44 52   ← 真 PNG 签名 + IHDR
+偏移 32..     原样
+```
+
+**先量、再写代码**：正因为先拿真实文件验证了这 32 个字节，才没有出现
+"自己加密自己解密、测试全绿但算法是错的"这种自证循环。
+`test_iconutil.py` 里也把这两组真实字节（成功的与解不开的）钉成锚点。
+
+### 改了什么
+
+| 层 | 文件 | 内容 |
+| --- | --- | --- |
+| core | **新增 `core/iconutil.py`** | `find_sheet` / `encryption_key` / `decrypt_image` / `png_size` / `geometry` / `load` |
+| core | `core/constants.py` | `ICON_CELLS`（引擎→cell）、`ICON_COLUMNS`（恒 16） |
+| core | `core/context.py` | **`Response` 从 `ui/server.py` 搬过来**（ADR-014，见下） |
+| core | `core/formats/mv_save.py` | `GameDataMV.icons = {kind: {id: iconIndex}}` |
+| core | `core/formats/rgss_save.py` | `GameData.icons`（读 `@icon_index`），顺带把两张表一次遍历读完 |
+| features | `features/cheats/routes.py` | `icon_of` / `icon_meta` / `icon_sheet` + 两个端点；`catalog`/`party_view` 每行带 `icon` |
+| ui | `ui/web/pages/cheats.js` | `.switch` 小开关 + `iconCell()`（sprite 裁切）+ `nameCell()` |
+| ui | `ui/web/components.css` | `.switch` / `.icon-cell` / `.name-cell` / `.hide-icons`（只用令牌，零硬编码色值） |
+| tools | `tools/web_probe.mjs` | 新增 `--game <目录>`：**真的点界面**（填目录→点读取→点载入）并数图标格；DOM shim 补上 `click()` / `dispatchEvent()` / `.value` / `.checked` |
+
+### `Response` 为什么要搬家（ADR-014）
+
+`features/cheats/routes.py` 要返回**二进制**（那张解密后的 PNG），
+而 `Response` 当时定义在 `ui/server.py` → features 只能反向 import ui，
+正好和"`ui` → `features`"对撞。**这与 M3a 的 `core/sysdialog.py` 是同一个坑**
+（当时 F-09 当场拦下了 `ui/native_pick.py`）。
+
+结论：`Response` 不是"HTTP 的东西"，而是**处理器返回值的契约** —— 它和
+`Router` / `PageSpec` 是一家人，所以搬进 `core/context.py`；
+`ui/server.py` 同名再导出，**真正把它写上网的仍然只有 `ui/server.py`**。
+
+### 刻意避开的两个坑（都属于"看着正常、其实错了"）
+
+| 坑 | 后果 | 修法 |
+| --- | --- | --- |
+| 换游戏后图集缓存没失效 | 用新游戏的 `iconIndex` 裁旧游戏的图集 → 画出来是**另一件道具的图标**，界面上完全看不出异常 | `open_game()` 里显式清 `_icon_cache`；`TestIconCacheInvalidation`（MV 32px → VX Ace 24px） |
+| `iconIndex == 0` 当成有效第 0 格 | 同样画出别的道具 | `0` 画**虚线空位**；同时钉住 `icon_of` 里 `0` 与 `None` 的语义差别 |
+
+另外两个交互决定（都有断言）：
+**开关只切 class、不重建表格**（否则会抖掉用户"输了数还没点应用"的内容）；
+**图标按原始像素显示**（像素画缩放会糊）。
+
+### 真实边界：如实降级，不猜
+
+| 游戏 | 情况 | 表现 |
+| --- | --- | --- |
+| `D:\test1\wdss2`（MV，`.rpgmvp`） | 加密 | ✅ 解密后 320 格；页面上渲染出 43 个图标格（41 真 + 2 空位） |
+| `D:\gamess\demon\DD_V07c_Windows`（MZ 破解版） | `IconSet.png_` 被第三方汉化注入器改过，**本机 7 个真实游戏的 key 全试过都解不开** | 开关**置灰** + 「已加密，解不开：…（该图集可能被第三方汉化/破解工具改过）」，其余功能不受影响 |
+| `D:\gamess\boli\B7794\…`（VX Ace） | `Graphics/System` 是**空的**（被汉化工具剥掉） | 开关置灰 + 「找不到图标图集」 |
+
+这两条都留了断言 —— **"解不开"必须抛错，绝不能返回乱码**。
+
+### 怎么验证
+
+```powershell
+python tests/run_all.py            # 1022 例，0 失败（新增 76 例）
+python tools/check_footprint.py    # 45 文件 / 3 功能，0 错误
+python app.py --check              # 退出码 0，49 条路由
+
+# 真实游戏上驱动界面（这条是"图标真的显示出来"的硬证据）
+python app.py --port 8765 --no-browser
+node --experimental-vm-modules tools/web_probe.mjs http://127.0.0.1:8765 ui/web --game 'D:\test1\wdss2'
+```
+
+探针输出（用户那个游戏，图集是加密的）：
+
+```
+开关：存在=true 禁用=false 打开=true
+提示：图集 320 格，每格 32px（已从加密资源解密）；没有图标的条目显示虚线空位。
+图标格 43 个（真图标 41，空位 2）
+表格 3 张（表头行 3），tr 合计 46，图标格逐一对应数据行=true
+空位 啊啊啊啊 没有图标
+空位 #35 没有图标
+样例 -0px -352px 32pxx32px 药水 #176（第 12 行第 1 列）
+关掉后 class="hide-icons"，图标格仍 43 个（不重建表格）
+```
+
+### 过程中被自己的守卫抓到的两件事
+
+1. **死接口告警**：`tests/integration/test_cheats_page.py` 报
+   `/api/cheats/icon_set` 是"没有界面入口的死接口"。原因是图集地址内联写在
+   `url(/api/cheats/icon_set)` 里，而扫描器只认"紧跟在引号/反引号之后"的路径。
+   **没有放宽扫描器** —— 把地址提成 `const ICON_SET_URL`（本来也是更好的写法）。
+2. **容器写死宽度告警**：`test_ui_consistency` 报了 `.switch input { width: 1px }`
+   与 `.switch .track { width: 34px }`。这次是**扩充既有的豁免表**
+   （`.step` / `.tag` / `.chip` 同一类：几十像素、不装可变长文本），
+   并把判据写进注释。
+
+### 遗留
+
+* 图集"解不开"的破解版**没有兜底方案**（不做图像格式逆向）。已记入
+  `docs/OPEN-QUESTIONS.md`。
+* VX / XP 的真机样本仍然没有（XP 的 `RPG::Item` 根本没有 `@icon_index`，
+  所以 XP 不显示图标 —— 这是引擎限制，不是缺陷）。
+
+---
+
 ## 2026-09-13 ｜ 道具列表不如参考工具全（用户报告）：只列了"已持有"
 
 ### 用户报告

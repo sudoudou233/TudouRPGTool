@@ -4,7 +4,7 @@
 @feature  cheats
 @layer    features
 @public   MANIFEST, register, health
-@depends  core.engines, core.formats.mv_save, core.formats.rgss_save, core.safety
+@depends  core.engines, core.iconutil, core.formats.mv_save, core.formats.rgss_save, core.safety
 @tested   tests/features/cheats/
 @footprint docs/FEATURES.md#cheats
 
@@ -25,13 +25,14 @@ MANIFEST = {
     "id": "cheats",
     "name": "存档修改",
     "icon": "改",
-    "version": "0.3.0",
-    "description": "读取存档并修改金币、步数、道具/武器/防具数量、角色属性与技能、开关与变量；也能改游戏数据表（价格/攻击力/初始等级）；保存前自动备份。",
+    "version": "0.4.0",
+    "description": "读取存档并修改金币、步数、道具/武器/防具数量、角色属性与技能、开关与变量；也能改游戏数据表（价格/攻击力/初始等级）；道具列表可显示游戏内图标；保存前自动备份。",
     "order": 20,
 
     "core_deps": (
         "core.engines",
         "core.constants",
+        "core.iconutil",
         "core.formats.mv_save",
         "core.formats.rgss_save",
         "core.formats.mv_mz_data",

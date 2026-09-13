@@ -538,3 +538,49 @@ M0 已把这个缺口登记为"已知未验证边界"，M2a 必须给出结论�
 
 真机 VX / XP 样本仍是空白。`docs/ROADMAP.md` §3 保留该条目，
 建议在有条件时补一台真机样本（尤其是**汉化/破解变体**，合成样本覆盖不到）。
+
+---
+
+## ADR-014 ｜ `Response` 从 `ui/server.py` 搬到 `core/context.py`
+
+* **日期**：2026-09-13（M5 之后，加功能阶段）
+* **状态**：已采纳
+* **相关**：需求 §5.1（单向依赖）、`tools/check_footprint.py` **F-09**、
+  `docs/MODULES.md#coreiconutil`
+
+### 背景
+
+"道具前面显示游戏内图标"这个功能需要 `GET /api/cheats/icon_set` 返回
+**二进制**（一张 PNG，必要时解密后的）。而 `Response` 这个包装类当时定义在
+`ui/server.py` —— 也就是说 `features/cheats/routes.py` 要返回二进制，
+就必须 `import ui.server`。
+
+**这与 `core/sysdialog.py` 那次是同一个坑**（见 `docs/MODULES.md#coresysdialog`）：
+M3a 曾把系统对话框放在 `ui/native_pick.py`，`features/translate` 反向 import
+`ui`，被 F-09 当场拦下。当时的结论是"弹对话框是与业务和界面都无关的系统能力，
+正确位置是 `core`"。这次同样的问题换了张脸回来。
+
+### 决策
+
+把 `Response` 移进 `core/context.py` —— 和 `Router` / `PageSpec` / `AppContext`
+放在一起，因为它**不是 HTTP 的东西，而是"处理器返回值"的契约**。
+`ui/server.py` 以同名再导出（`__all__` 里声明），历史
+`from ui.server import Response` 不受影响；真正把 `Response` 写上网的**仍然
+只有 `ui/server.py`**。
+
+### 备选方案与否决理由
+
+| 方案 | 否决理由 |
+| --- | --- |
+| 在 `features` 里 `from ui.server import Response`（局部 import） | 依赖方向反了；F-09 只强制 `core` 不 import `ui`，但 `features → ui` 同样违背分层意图，且给后人留下"这样也行"的榜样 |
+| 让处理器返回 `{"__raw_bytes__": ...}` 之类的约定 | 把传输层细节塞进业务返回值，比搬一个类难懂得多 |
+| 新开一个 `core/http.py` | 为一个类开一个模块；`context.py` 已经是"handler 写什么、返回什么"的家 |
+
+### 影响
+
+* `ui/server.py` 少一个类定义，多两行再导出；`normalize()` / `error_response()`
+  / `serve_static()` 全部照旧。
+* 全仓 16 处 `from ui.server import ...` 只用到 `Request` / `free_port` /
+  `server` 模块本身，无一处受影响（`test_server.py` 全覆盖）。
+* 二进制响应的能力现在对**任何** feature 可用，不再需要绕过分层。
+

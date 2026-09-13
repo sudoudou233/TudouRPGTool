@@ -52,6 +52,9 @@ def _clean_ints(d):
 class GameDataMV:
     """Names/definitions read from the game's data/*.json files."""
 
+    #: 有 ``iconIndex`` 字段、且界面上会显示图标的三个表。
+    ICON_KINDS = ('items', 'weapons', 'armors')
+
     def __init__(self, datadir):
         self.datadir = datadir
         self.items = {}
@@ -59,6 +62,12 @@ class GameDataMV:
         self.armors = {}
         self.actors = {}
         self.classes = {}
+        #: ``{kind: {id: iconIndex}}`` —— 图集里的格子号（0 表示不显示图标）。
+        #: 单独存一份而不是塞进 ``items``，是因为 ``items`` 的形状被
+        #: ``features/cheats.routes.names()`` 等处按"纯字符串"依赖，改形状
+        #: 会波及一大片；这也与 RGSS 侧的 :class:`core.formats.rgss_save.GameData`
+        #: 保持同构。
+        self.icons = {kind: {} for kind in self.ICON_KINDS}
         self.title = ''
         self._load_names()
 
@@ -70,10 +79,11 @@ class GameDataMV:
         return jsoncodec.read_json_file(path)
 
     def _load_names(self):
-        for fname, store in [('Items.json', self.items),
-                             ('Weapons.json', self.weapons),
-                             ('Armors.json', self.armors),
-                             ('Classes.json', self.classes)]:
+        for fname, kind in [('Items.json', 'items'),
+                            ('Weapons.json', 'weapons'),
+                            ('Armors.json', 'armors')]:
+            store = getattr(self, kind)
+            icons = self.icons[kind]
             data = self._load_json(fname)
             if not isinstance(data, list):
                 continue
@@ -81,9 +91,25 @@ class GameDataMV:
                 if not isinstance(ent, dict):
                     continue
                 oid = ent.get('id')
+                if not isinstance(oid, int):
+                    continue
+                name = ent.get('name')
+                if isinstance(name, str):
+                    store[oid] = name
+                idx = ent.get('iconIndex')
+                # 0 是"不显示图标"，但仍要记下来 —— 界面靠"有没有这个键"
+                # 区分"这件道具没图标"与"这个表不提供图标信息"。
+                if isinstance(idx, int):
+                    icons[oid] = idx
+        data = self._load_json('Classes.json')
+        if isinstance(data, list):
+            for ent in data:
+                if not isinstance(ent, dict):
+                    continue
+                oid = ent.get('id')
                 name = ent.get('name')
                 if isinstance(oid, int) and isinstance(name, str):
-                    store[oid] = name
+                    self.classes[oid] = name
         data = self._load_json('Actors.json')
         if isinstance(data, list):
             for ent in data:
