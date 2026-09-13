@@ -701,7 +701,7 @@
       "tested": "tests/features/cheats/test_routes.py",
       "footprint": "docs/FEATURES.md#cheats",
       "vendored": false,
-      "lines": 897
+      "lines": 900
     },
     "features/selfcheck/__init__.py": {
       "feature": "selfcheck",

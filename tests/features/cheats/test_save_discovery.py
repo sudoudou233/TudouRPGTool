@@ -298,6 +298,20 @@ class TestSaveHints(CheatsCase):
         payload = self.saves_payload(game)
         self.assertEqual(payload["hint"], "")
 
+    def test_hint_has_no_markdown_markers(self):
+        """提示是**直接显示在界面上的纯文本** —— 不能出现 ``**`` 之类的标记。
+
+        实测踩到：第一版写了 ``但它们**是设置文件**``，页面上原样显示了星号。
+        """
+        for label, game in (
+                ("有设置文件", make_mv_game(os.path.join(self.root, "r"), saves=[])),
+                ("空目录", make_mv_game(os.path.join(self.root, "s"), saves=[],
+                                       config=False))):
+            payload = self.saves_payload(game)
+            with self.subTest(case=label):
+                self.assertNotIn("**", payload["hint"])
+                self.assertNotIn("`", payload["hint"])
+
     def test_search_block_always_present(self):
         game = make_mv_game(os.path.join(self.root, "q"), saves=[])
         payload = self.saves_payload(game)

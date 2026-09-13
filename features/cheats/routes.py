@@ -405,22 +405,25 @@ def _save_hint(saves, dirs, others):
 
     三种情况的处置完全不同，所以必须分开说 —— 只说"没找到存档"等于把
     排查工作全丢给用户（用户报告"搜索不到存档所在文件夹"时就是这么卡住的）。
+
+    ⚠ 这是**直接显示在界面上**的纯文本，不要写 markdown 标记（``**`` 之类
+    会原样出现在页面上）。
     """
     if saves:
         return ""
     existing = [d for d in dirs if os.path.isdir(d)]
     if others:
         names = "、".join(item["name"] for item in others[:3])
-        return ("存档目录里有 %s，但它们是**设置文件**而不是存档进度。"
-                "如果游戏里还没存过档，先进游戏存一次再回来刷新。"
+        return ("存档目录里有 %s，但它们是设置文件（记录音量/按键等），"
+                "不是存档进度。如果游戏里还没存过档，先进游戏存一次再回来刷新。"
                 % names)
     if existing:
-        return ("已在 %s 里找过，没有匹配「%s」的文件。"
+        return ("已在 %s 里找过，没有匹配的存档文件。"
                 "如果游戏里还没存过档，先进游戏存一次再点「刷新」。"
                 "存档在别处的话，可以直接把路径填进下面的输入框加载。"
-                % ("、".join(existing[:3]), "存档文件" if not saves else ""))
+                % "、".join(existing[:3]))
     return ("工具没有找到任何存档目录。"
-            "请确认选择的是游戏**最外层**目录（含 Game.exe 的那一层）。")
+            "请确认选择的是游戏最外层目录（含 Game.exe 的那一层）。")
 
 
 def _search_save_files(root, ext, limit=200):
