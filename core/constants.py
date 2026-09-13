@@ -3,7 +3,8 @@
 
 @feature  none
 @layer    core
-@public   ENGINES, ENGINE_ORDER, SAVE_PATTERNS, PARAMS, PARAM_LABELS, engine_label
+@public   ENGINES, ENGINE_ORDER, SAVE_PATTERNS, SAVE_CONFIG_PREFIXES, PARAMS,
+          PARAM_LABELS, engine_label
 @depends  (stdlib only)
 @tested   tests/unit/test_config.py
 @footprint docs/MODULES.md#coreconstants
@@ -42,15 +43,36 @@ DATA_EXTS = {
 }
 
 #: 引擎 -> (存档文件名正则, 人类可读的通配形式)
-#: 来源：rpgmaker_cheating_tool/engines.py:15-21（原样保留，含 MV/MZ 的 file*.rpgsave 命名）。
+#:
+#: 来源：rpgmaker_cheating_tool/engines.py:15-21（原样保留，含 MV/MZ 的
+#: ``file*.rpgsave`` 命名）。
+#:
+#: ⚠ **M5 放宽**（用户报告"搜索不到存档所在文件夹"时排查发现）：
+#: 原来的 ``^file\d+\.rpgsave$`` 只认**纯数字**槽位，于是真实存在的
+#: ``filegameEnd.rpgsave``（通关存档）、``file_auto.rpgsave`` 这类名字**一个都不认**。
+#: 现在两条都收：
+#:
+#: * ``file<数字>`` —— 标准槽位 ``file1.rpgsave``
+#: * ``file<字母/下划线开头>`` —— 插件/魔改运行时的命名 ``filegameEnd.rpgsave``
+#:
+#: 刻意**仍然排除** ``config.*`` / ``global.*`` / ``shared.*``：
+#: 它们是**设置项**（音量、按键、全局开关），不是存档槽位 ——
+#: 列进"可改存档"里会让用户以为改的是进度。
 SAVE_PATTERNS = {
     "vxace": (r"^Save\d+\.rvdata2$", "Save*.rvdata2"),
     "vx": (r"^Save\d+\.rvdata$", "Save*.rvdata"),
     "xp": (r"^Save\d+\.rxdata$", "Save*.rxdata"),
-    "mv": (r"^file\d+\.rpgsave$", "file*.rpgsave"),
-    "mz": (r"^file\d+\.rmmzsave$", "file*.rmmzsave"),
+    "mv": (r"^file(?:\d+|[A-Za-z_][\w-]*)\.rpgsave$", "file*.rpgsave"),
+    "mz": (r"^file(?:\d+|[A-Za-z_][\w-]*)\.rmmzsave$", "file*.rmmzsave"),
     "2k3": (r"^Save\d+\.lsd$", "Save*.lsd"),
 }
+
+#: 存档目录里**不是存档**、而是设置文件的常见名字前缀。
+#:
+#: 用在两个地方：① 识别结果里说明"这些看到但没列进来的文件是什么"；
+#: ② 万一将来放宽扩展名时兜底排除。MV/MZ 默认写 ``config.rpgsave`` /
+#: ``global.rpgsave``，MZ 还写 ``global.rmmzsave``。
+SAVE_CONFIG_PREFIXES = ("config", "global", "shared", "settings", "option")
 
 #: 存档文件扩展名（写"另存为"对话框的过滤器用）。
 SAVE_EXTS = {

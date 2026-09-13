@@ -5,6 +5,89 @@
 
 ---
 
+## 2026-09-13 ｜ 存档搜不到（用户报告）：规则太窄 + 说不清原因
+
+### 用户报告
+
+「存档修改板块搜索不到存档所在文件夹，是不是路径限制得太死了」
+
+### 排查结论：两件事，都要处理
+
+**（a）规则确实太窄。** 用整个样本库（`D:\gamess`）统计"像存档但认不出来"的名字：
+
+| 名字 | 出现次数 | 为什么漏 |
+| --- | --- | --- |
+| `filegameEnd.rpgsave` | 4 | `^file\d+\.rpgsave$` 只认**纯数字**槽位 |
+| `file_auto.rpgsave` 这类 | — | 同上（插件/魔改运行时的命名） |
+| `config.*` / `global.*` / `shared.*` | 27 | **正确的排除** —— 这些是设置项，不是进度 |
+
+另外 `find_save_dirs(max_depth=2)` 只够到 `<根>/www/save`；插件把存档放进
+`<根>/www/save/auto` 就搜不到了。
+
+**（b）说清楚比放宽更重要。** 原来只回一句「这个游戏目录下没有找到存档。」
+用户完全无从判断是"游戏还没存过档"、"存档在别处"还是"工具没认出来"。
+
+用用户当时那个游戏实测，答案是**第一种**：`www/save` 里只有 `config.rpgsave`
+（112 字节的设置文件）—— 这个游戏确实还没存过档。但界面没告诉他这件事。
+
+### 改了什么
+
+| 文件 | 变更 |
+| --- | --- |
+| `core/constants.py` | MV/MZ 命名规则放宽为 `^file(?:\d+\|[A-Za-z_][\w-]*)\.(rpgsave\|rmmzsave)$`（收 `filegameEnd` 这类）；新增 `SAVE_CONFIG_PREFIXES` 明确"设置文件"的判定 |
+| `core/engines.py` | ① `find_save_dirs` 深度 `2 → 3`（够到 `save/auto`）；② 新增 `_save_regex()` 统一编译；③ **新增 `list_other_save_files()`**：列出目录里"像存档但不是"的文件并附一句解释 |
+| `features/cheats/routes.py` | ① `save_dirs` 增加常见存档目录名（`save`/`Save`/`savedata`，**即使为空也算**）；② 去重改用 `os.path.normcase`；③ `saves` 接口回传 `search`（搜过哪些目录 / 命名规则 / 每个目录的存档数）、`other_files`、`hint`；④ **新增 `GET /api/cheats/find_saves`**：兜底按扩展名全盘搜，让用户自己挑 |
+| `ui/web/pages/cheats.js` | 空状态从一句话改为：① 说明原因；② 列出搜过的目录（每个带「打开」按钮）；③ 列出"不是存档"的文件及原因；④ 兜底一：手填路径直接加载；⑤ 兜底二：一键全盘搜索并给候选列表（标注是否符合命名规则） |
+| `tests/features/cheats/test_save_discovery.py`（新，22 例） | 命名变体、搜索范围、设置文件排除与解释、兜底搜索、提示文案 |
+| `tests/unit/test_engines.py` | 冻结基线 `V5.9` 的存档数 `2 → 3` 并写明原因（见下） |
+
+### 两个实测踩到的细节
+
+1. **`www/save` 与 `www/Save` 是同一个目录**（Windows 大小写不敏感）。
+   去重用普通字符串比较会得到两条一模一样的记录；改用 `os.path.normcase`
+   之后正确，且在真正大小写敏感的文件系统上仍是恒等变换、行为不变。
+   同一个原因还让 `config.rpgsave` 在 `other_files` 里出现两遍 —— 一并修掉。
+
+2. **冻结基线抓到了我的改动，而且基线本身是错的。**
+   `test_save_counts_match_frozen_baseline` 报 V5.9 期望 2、实际 3。
+   去实地看：该目录里是 `file0.rpgsave` / `file19.rpgsave` /
+   **`filegameEnd.rpgsave`** —— 旧规则漏了**通关存档**，基线把"漏数"冻结成了
+   正确值。现已改为 3 并在基线里写明原因。
+   **这正是冻结基线的用处**：它逼我停下来确认"是规则变错了，还是基线本来就错"，
+   而不是随手改数字。
+
+### 怎么验证
+
+```powershell
+python tests/run_all.py                 # 926 例（原 904 + 22），退出码 0
+python tools/check_footprint.py         # 44 文件 / 3 功能，0 错误
+node --experimental-vm-modules tools/web_probe.mjs http://127.0.0.1:8765 ui/web
+# → 三个页面都正常渲染、无失败
+```
+
+**用用户那个游戏实测**（现在会明确告诉他为什么）：
+
+```text
+save_dirs  : ['www\\save', '.']
+other_files: ['config.rpgsave'] → 这是设置文件（记录音量/按键等），不是存档进度
+hint       : 存档目录里有 config.rpgsave，但它是设置文件而不是存档进度。
+             如果游戏里还没存过档，先进游戏存一次再回来刷新。
+find_saves : 全盘只有 1 个 .rpgsave（就是那个 config），by_rule=False
+```
+
+**回归确认另外两个游戏照常**：
+VX Ace 样本 → 9 个 `Save*.rvdata2`；MZ 样本 → 3 个 `file*.rmmzsave`。
+
+### 教训
+
+"找不到"这类反馈里，**用户要的往往不是"放宽规则"，而是"告诉我为什么找不到"**。
+这次两者都做了，但真正让用户能自助的是后者 —— 把搜索范围、看到的文件、
+下一步该做什么摊开，比再多猜几种命名规则更有用。
+（放宽规则只让 V5.9 那一个样本多认出一个文件；说清楚则让所有"找不到"的情况
+都能被用户自己判断。）
+
+---
+
 ## 2026-09-13 ｜ **用户报告**「对话文本没有被翻译到」：地图事件路径缺 `list` 层（54.86% 丢失）
 
 ### 现象

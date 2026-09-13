@@ -206,9 +206,8 @@
         "ENGINES",
         "ENGINE_ORDER",
         "SAVE_PATTERNS",
-        "PARAMS",
-        "PARAM_LABELS",
-        "engine_label"
+        "SAVE_CONFIG_PREFIXES",
+        "PARAMS"
       ],
       "depends": [
         "(stdlib only)"
@@ -216,7 +215,7 @@
       "tested": "tests/unit/test_config.py",
       "footprint": "docs/MODULES.md#coreconstants",
       "vendored": false,
-      "lines": 87
+      "lines": 109
     },
     "core/context.py": {
       "feature": "none",
@@ -243,8 +242,7 @@
         "detect_engine",
         "describe",
         "list_saves",
-        "find_save_dirs",
-        "data_dir"
+        "list_other_save_files"
       ],
       "depends": [
         "core.constants"
@@ -252,7 +250,7 @@
       "tested": "tests/unit/test_engines.py",
       "footprint": "docs/MODULES.md#coreengines",
       "vendored": false,
-      "lines": 432
+      "lines": 472
     },
     "core/formats/__init__.py": {
       "feature": "none",
@@ -703,7 +701,7 @@
       "tested": "tests/features/cheats/test_routes.py",
       "footprint": "docs/FEATURES.md#cheats",
       "vendored": false,
-      "lines": 760
+      "lines": 897
     },
     "features/selfcheck/__init__.py": {
       "feature": "selfcheck",

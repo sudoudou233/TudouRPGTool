@@ -3,8 +3,9 @@
 
 @feature  none
 @layer    core
-@public   detect, detect_engine, describe, list_saves, find_save_dirs, data_dir,
-          save_dir, game_root, js_root, game_root_for, CONVERGENCE_STATUS
+@public   detect, detect_engine, describe, list_saves, list_other_save_files,
+          find_save_dirs, data_dir, save_dir, game_root, js_root,
+          game_root_for, CONVERGENCE_STATUS
 @depends  core.constants
 @tested   tests/unit/test_engines.py
 @footprint docs/MODULES.md#coreengines
@@ -352,6 +353,14 @@ def describe(info):
 # ---------------------------------------------------------------------------
 # 存档发现
 # ---------------------------------------------------------------------------
+def _save_regex(engine):
+    """取某引擎的存档名正则（已编译）；未登记返回 None。"""
+    pattern = constants.SAVE_PATTERNS.get(engine)
+    if not pattern:
+        return None
+    return re.compile(pattern[0])
+
+
 def list_saves(info, game_dir=None):
     """列出存档目录下的存档文件名（已排序）。
 
@@ -360,8 +369,8 @@ def list_saves(info, game_dir=None):
     """
     if not info or not info.get("engine"):
         return []
-    pattern = constants.SAVE_PATTERNS.get(info["engine"])
-    if not pattern:
+    rx = _save_regex(info["engine"])
+    if rx is None:
         return []
     save_dir = info.get("save_dir") or game_dir
     if not save_dir or not _is_dir(save_dir):
@@ -370,27 +379,58 @@ def list_saves(info, game_dir=None):
         names = os.listdir(save_dir)
     except OSError:
         return []
-    rx = re.compile(pattern[0])
     return sorted(name for name in names if rx.match(name))
 
 
-def find_save_dirs(info, game_dir, max_depth=2):
+def list_other_save_files(info, directory):
+    """列出存档目录里**像存档但不是存档槽位**的文件，附一句解释。
+
+    典型是 ``config.rpgsave`` / ``global.rmmzsave`` —— **设置项**，不是进度。
+    用户看到目录里"明明有文件"却列表为空时，这里能给出一句人话。
+    """
+    if not directory or not _is_dir(directory):
+        return []
+    engine = (info or {}).get("engine")
+    ext = constants.SAVE_EXTS.get(engine, "")
+    if not ext:
+        return []
+    rx = _save_regex(engine)
+    out = []
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        return []
+    for name in names:
+        if not name.lower().endswith(ext):
+            continue
+        if rx is not None and rx.match(name):
+            continue
+        stem = name.rsplit(".", 1)[0].lower()
+        reason = ("这是设置文件（记录音量/按键等），不是存档进度"
+                  if stem in constants.SAVE_CONFIG_PREFIXES
+                  else "文件名不匹配本引擎的存档命名规则")
+        out.append({"name": name, "reason": reason})
+    return out
+
+
+def find_save_dirs(info, game_dir, max_depth=3):
     """搜索所有可能存放存档的目录（应对"自动存档"等第二套存档）。
 
     返回 ``[(dir, [文件名...]), ...]``，目录已排序；只包含**真的有存档**的目录。
 
-    搜索范围是**游戏根**（``info['game_dir']``）—— 这样老版 MV 的
-    ``<根>/www/save`` 与新版 MV/MZ 的 ``<根>/save`` 都能覆盖
-    （``max_depth=2`` 正好够下探到 ``www/save``）。
+    搜索范围是**游戏根**（``info['game_dir']``）。深度默认 **3** 层：
+    老版 MV 的存档在 ``<根>/www/save``（深度 2），而有些改造版/插件会把
+    存档放进 ``<根>/www/save/auto`` 这类子目录（深度 3）—— 原来的 2 层
+    会让那些游戏"一个存档都搜不到"。
+
     ``info['save_dir']`` 会被预置进候选，但**空目录不会出现在返回值里**
     （调用方若要"合法目录白名单"，用 ``save_dir(info)`` 而不是本函数）。
     """
     if not info or not info.get("engine"):
         return []
-    pattern = constants.SAVE_PATTERNS.get(info["engine"])
-    if not pattern:
+    rx = _save_regex(info["engine"])
+    if rx is None:
         return []
-    rx = re.compile(pattern[0])
     root = info.get("game_dir") or os.path.abspath(game_dir or "")
     if not root or not _is_dir(root):
         return []

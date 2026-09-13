@@ -159,7 +159,7 @@ async function loadSaves() {
   }
   state.saves = res.saves || [];
   if (!state.saves.length) {
-    host.append(el('div', { class: 'empty', text: '这个游戏目录下没有找到存档。' }));
+    renderNoSaves(host, res);
     return;
   }
 
@@ -211,6 +211,144 @@ async function loadSaves() {
       text: `游戏目录下已有 ${res.backups.length} 个备份（最新的：${res.backups[0].name}）。`,
     }));
   }
+}
+
+/**
+ * 「一个存档都没找到」时该显示什么。
+ *
+ * ⚠ 这里以前只有一句「这个游戏目录下没有找到存档。」—— 用户看到这句话
+ * 完全无从判断是**游戏还没存过档**、**存档在别处**、还是**工具的规则没认出来**
+ * （实测就卡在这里：报告的"搜索不到存档所在文件夹"）。
+ *
+ * 现在把三种情况的线索一次性摊开：
+ *   1. 我找过哪些目录（并给出「打开」按钮，用户自己一看就明白）
+ *   2. 目录里有哪些"看着像存档但不是"的文件 —— 例如 `config.rpgsave`
+ *      是设置而不是进度，恰恰是"目录里有文件却列表为空"时最迷惑人的东西
+ *   3. 两步兜底：手动填路径，或全盘按扩展名搜一遍让用户自己挑
+ */
+function renderNoSaves(host, res) {
+  const search = res.search || {};
+  host.append(el('div', { class: 'empty' }, [
+    el('div', { text: '没有找到存档文件。' }),
+    el('div', {
+      class: 'hint',
+      text: res.hint || '如果游戏里还没存过档，先进游戏存一次再点「刷新」。',
+    }),
+  ]));
+
+  /* ---- 找过哪些目录 ---- */
+  const dirs = (search.dirs || []);
+  if (dirs.length) {
+    const tbody = el('tbody', {});
+    for (const item of dirs) {
+      tbody.append(el('tr', {}, [
+        el('td', {}, [el('span', { class: 'code', text: item.dir })]),
+        el('td', { class: 'nowrap' }, [item.exists
+          ? el('span', { class: 'tag ok', text: '存在' })
+          : el('span', { class: 'tag skipped', text: '不存在' })]),
+        el('td', { class: 'num', text: String(item.saves) }),
+        el('td', {}, [el('button', {
+          class: 'btn sm', type: 'button', text: '打开',
+          disabled: !item.exists,
+          onclick: () => openInExplorer(item.dir),
+        })]),
+      ]));
+    }
+    host.append(el('div', { class: 'hint', text: '工具搜索过这些目录：' }));
+    host.append(el('div', { class: 'table-wrap' }, [
+      el('table', {}, [
+        el('thead', {}, [el('tr', {}, [
+          el('th', { text: '目录' }), el('th', { text: '状态' }),
+          el('th', { text: '存档数' }), el('th', { text: '操作' }),
+        ])]),
+        tbody,
+      ]),
+    ]));
+    if (search.pattern) {
+      host.append(el('div', {
+        class: 'hint',
+        text: `本引擎（${state.game && state.game.engine || ''}）的存档命名规则：${search.pattern}`,
+      }));
+    }
+  }
+
+  /* ---- 目录里那些"不是存档"的文件 ---- */
+  const others = res.other_files || [];
+  if (others.length) {
+    host.append(el('div', { class: 'warn-text', text: '注意：目录里有下面这些文件，但它们不是存档进度：' }));
+    const list = el('ul', { class: 'muted' });
+    for (const item of others.slice(0, 8)) {
+      list.append(el('li', {}, [
+        el('span', { class: 'code', text: item.name }),
+        document.createTextNode(` —— ${item.reason}`),
+      ]));
+    }
+    host.append(list);
+  }
+
+  /* ---- 兜底 1/2：手动填路径 ---- */
+  const manual = el('input', {
+    type: 'text', placeholder: '把存档文件的完整路径粘到这里（例如 …\\www\\save\\file1.rpgsave）',
+  });
+  const manualBtn = el('button', {
+    class: 'btn sm primary', type: 'button', text: '强制加载这个文件',
+    onclick: () => loadSave(manual.value.trim()),
+  });
+  host.append(el('hr', { class: 'divider' }));
+  host.append(el('div', { class: 'row' }, [manual, manualBtn]));
+
+  /* ---- 兜底 2/2：全盘按扩展名搜 ---- */
+  const scanBtn = el('button', {
+    class: 'btn sm', type: 'button', text: '在整个游戏目录里搜一遍',
+  });
+  const scanHost = el('div');
+  scanBtn.addEventListener('click', async () => {
+    scanBtn.disabled = true;
+    scanHost.textContent = '';
+    try {
+      const found = await getJSON('/api/cheats/find_saves');
+      const list = found.candidates || [];
+      scanHost.append(el('div', { class: 'hint', text: found.note || '' }));
+      if (!list.length) {
+        scanHost.append(el('div', {
+          class: 'empty',
+          text: `在 ${found.root} 里没有找到任何 ${found.ext} 文件 —— `
+            + '说明这个游戏确实还没有存档，先进游戏存一次再回来刷新。',
+        }));
+        return;
+      }
+      const tbody = el('tbody', {});
+      for (const item of list.slice(0, 50)) {
+        tbody.append(el('tr', {}, [
+          el('td', {}, [el('span', { class: 'code', text: item.name })]),
+          el('td', { class: 'hint mono', text: item.dir }),
+          el('td', { class: 'num', text: fmtSize(item.size) }),
+          el('td', {}, [item.by_rule
+            ? el('span', { class: 'tag ok', text: '符合命名规则' })
+            : el('span', { class: 'tag warn', text: '名字不常见' })]),
+          el('td', {}, [el('button', {
+            class: 'btn sm primary', type: 'button', text: '加载',
+            onclick: () => loadSave(item.path),
+          })]),
+        ]));
+      }
+      scanHost.append(el('div', { class: 'table-wrap' }, [
+        el('table', {}, [
+          el('thead', {}, [el('tr', {}, [
+            el('th', { text: '文件' }), el('th', { text: '目录' }),
+            el('th', { text: '大小' }), el('th', { text: '匹配' }), el('th', { text: '操作' }),
+          ])]),
+          tbody,
+        ]),
+      ]));
+    } catch (err) {
+      scanHost.append(el('div', { class: 'error-text', text: '搜索失败：' + err.message }));
+    } finally {
+      scanBtn.disabled = false;
+    }
+  });
+  host.append(el('div', { class: 'row' }, [scanBtn]));
+  host.append(scanHost);
 }
 
 async function loadSave(path) {

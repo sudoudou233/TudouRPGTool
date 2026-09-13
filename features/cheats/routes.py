@@ -32,6 +32,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 
 from core import constants
@@ -195,30 +196,50 @@ class CheatsService(object):
     def save_dirs(self):
         """本游戏所有**合法**的存档目录（用于校验路径、也用于展示）。
 
-        包含两类：
+        包含三类：
 
         * ``info['save_dir']`` —— 引擎判据给出的标准位置（MV/MZ 是
           ``<js根>/save``，RGSS 是游戏根）；**即使它现在是空的也要算**，
           因为"目录里还没有存档"不等于"不许往这里写"；
         * ``engines.find_save_dirs`` 递归找到的其它位置 —— 应对自动存档、
-          旧版布局（例如老 MV 把存档放在 ``www/save``）等第二套存档。
+          旧版布局（例如老 MV 把存档放在 ``www/save``）等第二套存档；
+        * 游戏根下的 ``save`` / ``Save`` / ``savedata`` 等常见名字 ——
+          有些改造版运行时把存档放在这类目录里，而里面暂时没有存档文件，
+          递归搜索（只返回**含存档**的目录）看不到它们。
 
         结果按绝对路径**去重**：RGSS 的 ``save_dir`` 就是游戏根，
         而游戏根本来也在候选里，不去重会在界面上出现两个一样的位置。
+
+        ⚠ 去重要用 ``os.path.normcase``（Windows 上大小写不敏感）：
+        ``www/save`` 与 ``www/Save`` 在 Windows 上是**同一个目录**，
+        用普通字符串比较会得到两条一模一样的记录（实测踩到）。
+        在真正大小写敏感的文件系统上，``normcase`` 是恒等变换，
+        两个不同目录都会被保留 —— 行为仍然正确。
         """
         info = self.require_game()
         seen = []
+        seen_keys = set()
 
         def add(path):
             if not path:
                 return
             absdir = os.path.abspath(path)
-            if absdir not in seen:
-                seen.append(absdir)
+            key = os.path.normcase(absdir)
+            if key in seen_keys:
+                return
+            seen_keys.add(key)
+            seen.append(absdir)
 
         add(info.get("save_dir"))
         for directory, _names in engines.find_save_dirs(info, self.game_dir):
             add(directory)
+        # 常见但"暂时为空"的存档目录名（老/改造版运行时的习惯）
+        root = info.get("js_root") or self.game_dir
+        for base in (self.game_dir, root):
+            for name in ("save", "Save", "savedata", "SaveData"):
+                candidate = os.path.join(base, name)
+                if os.path.isdir(candidate):
+                    add(candidate)
         add(self.game_dir)
         return seen
 
@@ -379,6 +400,47 @@ def _rel(game_dir, path):
     return rel.replace("\\", "/")
 
 
+def _save_hint(saves, dirs, others):
+    """给"找不到存档"一句**能指导下一步**的话。
+
+    三种情况的处置完全不同，所以必须分开说 —— 只说"没找到存档"等于把
+    排查工作全丢给用户（用户报告"搜索不到存档所在文件夹"时就是这么卡住的）。
+    """
+    if saves:
+        return ""
+    existing = [d for d in dirs if os.path.isdir(d)]
+    if others:
+        names = "、".join(item["name"] for item in others[:3])
+        return ("存档目录里有 %s，但它们是**设置文件**而不是存档进度。"
+                "如果游戏里还没存过档，先进游戏存一次再回来刷新。"
+                % names)
+    if existing:
+        return ("已在 %s 里找过，没有匹配「%s」的文件。"
+                "如果游戏里还没存过档，先进游戏存一次再点「刷新」。"
+                "存档在别处的话，可以直接把路径填进下面的输入框加载。"
+                % ("、".join(existing[:3]), "存档文件" if not saves else ""))
+    return ("工具没有找到任何存档目录。"
+            "请确认选择的是游戏**最外层**目录（含 Game.exe 的那一层）。")
+
+
+def _search_save_files(root, ext, limit=200):
+    """在 ``root`` 下**按扩展名**找文件（不看命名规则），最多返回 ``limit`` 个。
+
+    用途：命名规则没认出来时的兜底 —— 让用户自己从列表里挑。
+    """
+    found = []
+    if not root or not os.path.isdir(root):
+        return found
+    for base, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in ("__pycache__", ".git")]
+        for name in sorted(files):
+            if name.lower().endswith(ext):
+                found.append(os.path.join(base, name))
+                if len(found) >= limit:
+                    return found
+    return found
+
+
 def register_routes(ctx, service):
     """登记所有修改功能的路由。返回路由表总条数（仅供启动日志）。"""
     ctx.cheats_service = service
@@ -470,14 +532,51 @@ def register_routes(ctx, service):
     # ------------------------------------------------------------------ 存档
     @ctx.get("/api/cheats/saves", name="cheats_saves")
     def cheats_saves(request=None):
+        """存档列表 + **搜索范围** + 目录里那些"看着像存档但不是"的文件。
+
+        为什么要回传搜索范围（用户报告"搜索不到存档所在文件夹"时加的）：
+        原来只返回一个空列表 + 一句"没有找到存档"，用户**无从判断**是
+        （a）游戏还没存过档，（b）存档在别处，（c）工具的规则没认出来。
+        现在把"我找过哪些目录""看到哪些文件但我没当成存档"一并给出，
+        并附上手动指定路径的能力，三种情况都能自助区分。
+        """
         try:
             service.require_game()
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
-        return {"ok": True, "saves": service.list_saves(),
-                "current": service.save_path,
-                "save_dirs": service.save_dirs(),
-                "backups": backup_mod.list_backups(service.game_dir)}
+        info = service.info
+        saves = service.list_saves()
+        dirs = service.save_dirs()
+        pattern = constants.SAVE_PATTERNS.get(service.engine)
+        others = []
+        seen_others = set()
+        for directory in dirs:
+            for item in engines.list_other_save_files(info, directory):
+                key = (os.path.normcase(os.path.abspath(directory)), item["name"])
+                if key in seen_others:
+                    continue
+                seen_others.add(key)
+                others.append({"dir": directory, "name": item["name"],
+                               "reason": item["reason"]})
+        return {
+            "ok": True,
+            "saves": saves,
+            "current": service.save_path,
+            "save_dirs": dirs,
+            "search": {
+                "game_dir": info.get("game_dir"),
+                "js_root": info.get("js_root"),
+                "save_dir": info.get("save_dir"),
+                "pattern": pattern[1] if pattern else "",
+                "dirs": [{"dir": d, "exists": os.path.isdir(d),
+                          "saves": sum(1 for s in saves if s["dir"] == d)}
+                         for d in dirs],
+            },
+            # 目录里有、但**不是存档槽位**的文件（典型是 config/global 设置）
+            "other_files": others,
+            "hint": _save_hint(saves, dirs, others),
+            "backups": backup_mod.list_backups(service.game_dir),
+        }
 
     @ctx.post("/api/cheats/load", name="cheats_load")
     def cheats_load(request):
@@ -494,6 +593,44 @@ def register_routes(ctx, service):
         except Exception as exc:
             return {"ok": False,
                     "error": "读取存档失败：%s: %s" % (type(exc).__name__, exc)}
+
+    @ctx.get("/api/cheats/find_saves", name="cheats_find_saves")
+    def cheats_find_saves(request=None):
+        """**兜底搜索**：按扩展名在整个游戏安装里找存档，绕开命名规则。
+
+        为什么需要它（用户报告"搜索不到存档所在文件夹"）：命名规则再放宽也
+        总有漏网的（插件自定义槽位名、改造版运行时换扩展名）。此时与其让
+        用户对着空列表发呆，不如把"看起来像存档的文件"全列出来，让他自己挑。
+        这一层**只读、不改任何东西**，是最安全的兜底。
+        """
+        try:
+            info = service.require_game()
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        ext = constants.SAVE_EXTS.get(service.engine, "")
+        pattern = constants.SAVE_PATTERNS.get(service.engine)
+        rx = pattern[0] if pattern else ""
+        regex = re.compile(rx) if rx else None
+        root = os.path.dirname(info["game_dir"])      # 含游戏根的那一层
+        if not os.path.isdir(root):
+            root = info["game_dir"]
+        candidates = []
+        for full in _search_save_files(root, ext):
+            name = os.path.basename(full)
+            candidates.append({
+                "path": full,
+                "name": name,
+                "dir": os.path.dirname(full),
+                "size": os.path.getsize(full) if os.path.isfile(full) else 0,
+                # 按命名规则命中的排在前面，其余标出来让用户自己判断
+                "by_rule": bool(regex and regex.match(name)),
+            })
+        candidates.sort(key=lambda c: (not c["by_rule"], c["path"]))
+        return {"ok": True, "ext": ext, "root": root,
+                "candidates": candidates,
+                "note": "这是按扩展名 %s 的全盘搜索（未过滤命名规则），"
+                        "包含备份、设置文件与其它目录；请自行确认要改哪一个。"
+                        % ext}
 
     @ctx.get("/api/cheats/party", name="cheats_party")
     def cheats_party(request=None):

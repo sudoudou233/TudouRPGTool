@@ -347,6 +347,7 @@ class TestRouteRegistration(unittest.TestCase):
         ("POST", "/api/cheats/open"),
         ("POST", "/api/cheats/pick_folder"),
         ("GET", "/api/cheats/saves"),
+        ("GET", "/api/cheats/find_saves"),
         ("POST", "/api/cheats/load"),
         ("GET", "/api/cheats/party"),
         ("GET", "/api/cheats/actors"),

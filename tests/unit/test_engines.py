@@ -298,8 +298,10 @@ FROZEN_REAL_GAME_BASELINE = (
      "MV：www/js/rpg_core.js（无存档）"),
     (r"D:\gamess\踏勇\践踏勇者\整合\整合-1\1.12.3", "vxace", 24,
      "VX Ace：Data/*.rvdata2 + Save*.rvdata2（含改造版运行时）"),
-    (r"D:\gamess\zhoukai\诅咒铠甲2\PC\PC-1\V5.9", "mv", 2,
-     "MV：第二个样本，验证判据不是只对某一个游戏成立"),
+    (r"D:\gamess\zhoukai\诅咒铠甲2\PC\PC-1\V5.9", "mv", 3,
+     "MV：第二个样本，验证判据不是只对某一个游戏成立"
+     "（M5 从 2 改为 3：该目录里实际有 file0 / file19 / **filegameEnd**"
+     " 三个槽位，旧规则 ^file\\d+\\.rpgsave$ 漏掉了通关存档）"),
     (r"D:\gamess\JIANTATA\1-6\PC-1\ToT 1.16.2.2 CN1.0", "vxace", 1,
      "目录名易被误判为 XP，实为 VX Ace（.rvdata2）"),
     (r"D:\gamess\boli\B7794\博麗霊夢は洗脳されてしまいました", "vxace", 9,
